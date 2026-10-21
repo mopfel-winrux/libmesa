@@ -126,6 +126,7 @@ pub fn build(b: *std.Build) !void {
             "knot.c",
             "store_mem.c",
             "store_sqlite.c",
+            "gall.c",
             "eng/eng_util.c",
             "eng/eng_space.c",
             "eng/eng_serve.c",
@@ -150,6 +151,63 @@ pub fn build(b: *std.Build) !void {
     //  tests
     //
 
+    addE2e(b, target, optimize, lib, crypt, sql, urcrypt, flags.items);
+
+    //
+    //  libmesa-host: libuv event loop, galaxy DNS, azimuth over HTTPS
+    //
+
+    const no_host = b.option(bool, "no-host", "Don't build libmesa-host (libuv, curl, OpenSSL)") orelse false;
+    if (!no_host) {
+        const no_lto = target.result.os.tag == .macos;
+        if (b.lazyDependency("libuv", .{ .target = target, .optimize = optimize, .no_lto = no_lto })) |uv| {
+            if (b.lazyDependency("curl", .{ .target = target, .optimize = optimize, .no_lto = no_lto })) |curl| {
+                const host = b.addLibrary(.{
+                    .name = "mesa-host",
+                    .linkage = .static,
+                    .root_module = b.createModule(.{
+                        .target = target,
+                        .optimize = optimize,
+                    }),
+                });
+                host.linkLibC();
+                host.linkLibrary(lib);
+                host.linkLibrary(uv.artifact("libuv"));
+                host.linkLibrary(curl.artifact("curl"));
+                host.bundle_ubsan_rt = true;
+                addIncludes(b, host, urcrypt);
+                host.addCSourceFiles(.{
+                    .root = b.path("src"),
+                    .files = &.{"host/host.c"},
+                    .flags = flags.items,
+                });
+                b.installArtifact(host);
+                b.installArtifact(uv.artifact("libuv"));
+                b.installArtifact(curl.artifact("curl"));
+
+                //  mesa-ping: poke a ship from the command line
+                //
+                const tool = b.addExecutable(.{
+                    .name = "mesa-ping",
+                    .root_module = b.createModule(.{
+                        .target = target,
+                        .optimize = optimize,
+                    }),
+                });
+                tool.linkLibC();
+                tool.linkLibrary(host);
+                tool.linkLibrary(uv.artifact("libuv"));
+                tool.linkLibrary(curl.artifact("curl"));
+                tool.linkLibrary(lib);
+                tool.linkLibrary(crypt);
+                tool.linkLibrary(sql);
+                addIncludes(b, tool, urcrypt);
+                tool.addCSourceFiles(.{ .files = &.{"tools/mesa-ping.c"}, .flags = flags.items });
+                b.installArtifact(tool);
+            }
+        }
+    }
+
     const test_step = b.step("test", "Run unit tests");
 
     const tests = [_]struct { name: []const u8, file: []const u8, defs: []const []const u8 }{
@@ -163,6 +221,7 @@ pub fn build(b: *std.Build) !void {
         .{ .name = "azimuth-test", .file = "test/azimuth_test.c", .defs = &.{} },
         .{ .name = "engine-test", .file = "test/engine_test.c", .defs = &.{} },
         .{ .name = "store-test", .file = "test/store_test.c", .defs = &.{} },
+        .{ .name = "gall-test", .file = "test/gall_test.c", .defs = &.{} },
     };
 
     for (tests) |tst| {
@@ -194,6 +253,34 @@ pub fn build(b: *std.Build) !void {
         const build_only = b.step(tst.name, b.fmt("Build and run {s}", .{tst.name}));
         build_only.dependOn(&run.step);
     }
+}
+
+fn addE2e(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    lib: *std.Build.Step.Compile,
+    crypt: *std.Build.Step.Compile,
+    sql: *std.Build.Step.Compile,
+    urcrypt: *std.Build.Dependency,
+    flags: []const []const u8,
+) void {
+    const exe = b.addExecutable(.{
+        .name = "mesa-e2e",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    exe.linkLibC();
+    exe.linkLibrary(lib);
+    exe.linkLibrary(crypt);
+    exe.linkLibrary(sql);
+    addIncludes(b, exe, urcrypt);
+    exe.addCSourceFiles(.{ .files = &.{"test/e2e/e2e.c"}, .flags = flags });
+
+    const step = b.step("e2e", "Build the interop test against a fake ~zod");
+    step.dependOn(&b.addInstallArtifact(exe, .{}).step);
 }
 
 fn addIncludes(
