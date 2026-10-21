@@ -92,6 +92,15 @@ pub fn build(b: *std.Build) !void {
             "ident.c",
             "json.c",
             "azimuth.c",
+            "knot.c",
+            "store_mem.c",
+            "eng/eng_util.c",
+            "eng/eng_space.c",
+            "eng/eng_serve.c",
+            "eng/eng_peer.c",
+            "eng/eng_fetch.c",
+            "eng/eng_flow.c",
+            "eng/engine.c",
             "wire/bitset.c",
             "wire/lss.c",
             "wire/pact.c",
@@ -119,6 +128,7 @@ pub fn build(b: *std.Build) !void {
         .{ .name = "crypto-test", .file = "test/crypto_test.c", .defs = &.{} },
         .{ .name = "ident-test", .file = "test/ident_test.c", .defs = &.{} },
         .{ .name = "azimuth-test", .file = "test/azimuth_test.c", .defs = &.{} },
+        .{ .name = "engine-test", .file = "test/engine_test.c", .defs = &.{} },
     };
 
     for (tests) |tst| {
@@ -158,6 +168,7 @@ fn addIncludes(
     c.addIncludePath(b.path("include"));
     c.addIncludePath(b.path("src"));
     c.addIncludePath(b.path("src/wire"));
+    c.addIncludePath(b.path("src/eng"));
     c.addIncludePath(b.path("vendor"));
     c.addIncludePath(b.path("vendor/murmur3"));
     c.addIncludePath(b.path("vendor/verstable"));

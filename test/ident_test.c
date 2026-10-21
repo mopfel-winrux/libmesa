@@ -97,7 +97,7 @@ static void
 _test_sha(void)
 {
   c3_y out_y[64];
-  c3_y buf_y[200];
+  c3_y buf_y[208];
 
   mesa_shax(3, (const c3_y*)"abc", out_y);
   _check("shax-abc", 32, out_y);
@@ -105,7 +105,7 @@ _test_sha(void)
   mesa_shax(0, 0, out_y);
   _check("shax-empty", 32, out_y);
 
-  memset(buf_y, 'a', sizeof(buf_y));
+  memset(buf_y, 'a', 200);
   mesa_shay(200, buf_y, out_y);
   _check("shay-long", 32, out_y);
 

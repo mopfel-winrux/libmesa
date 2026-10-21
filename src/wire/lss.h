@@ -54,6 +54,11 @@ void lss_verifier_init(lss_verifier* ver_u, c3_h steps, c3_h leaves, lss_hash* p
 void lss_complete_inline_proof(lss_hash* proof, c3_y* leaf_y, c3_h leaf_h);
 
 // Recovers the root of an LSS Merkle tree from the provided proof.
+// NB: this is not the BLAKE3 hash of the message (no ROOT flag); pages
+// are authenticated over that, see lss_recover_root().
 void lss_root(lss_hash root, lss_hash* proof, c3_h proof_h);
+
+// The message's BLAKE3 hash, from a proof of at least two hashes.
+void lss_recover_root(lss_hash root, lss_hash* proof, c3_h proof_h);
 
 #endif

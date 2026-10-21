@@ -210,6 +210,25 @@ void lss_complete_inline_proof(lss_hash* proof, c3_y* leaf_y, c3_h leaf_h) {
   _subtree_root(proof[0], leaf_y, leaf_h, 0);
 }
 
+// Recovers the message's BLAKE3 hash from a proof of at least two hashes:
+// like lss_root(), but the last parent is the root node (ROOT flag), as
+// +recover-root:verifier:lss in zuse.hoon. This is what pages sign.
+void lss_recover_root(lss_hash root, lss_hash* proof, c3_h proof_h) {
+  c3_y cv[32];
+  c3_y block[64];
+  lss_hash h;
+  memcpy(h, proof[0], sizeof(lss_hash));
+  for (c3_h i = 1; i < proof_h; i++) {
+    memcpy(cv, IV, 32);
+    memcpy(block, h, 32);
+    memcpy(block + 32, proof[i], 32);
+    c3_y flags = (1 << 2) | ((i + 1 == proof_h) ? (1 << 3) : 0); // PARENT, ROOT
+    urcrypt_blake3_compress(cv, block, 64, 0, flags, block);
+    memcpy(h, block, 32);
+  }
+  memcpy(root, h, sizeof(lss_hash));
+}
+
 void lss_root(lss_hash root, lss_hash* proof, c3_h proof_h) {
   memcpy(root, proof[0], sizeof(lss_hash));
   for (c3_h i = 1; i < proof_h; i++) {

@@ -648,8 +648,11 @@ _mesa_sift_name(u3_sifter* sif_u, u3_mesa_name* nam_u)
   nam_u->boq_y = _sift_byte(sif_u);
 
   if ( met_u.nit_y ) {
-    assert( !met_u.tau_y );
-    assert( !met_u.gaf_y );
+    //  attacker-controlled bits: reject rather than assert
+    //
+    if ( met_u.tau_y || met_u.gaf_y ) {
+      _sift_fail(sif_u, "init name with auth/fragment bits");
+    }
     // XX init packet
     nam_u->fra_d = 0;
   }
