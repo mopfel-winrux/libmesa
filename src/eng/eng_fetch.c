@@ -263,6 +263,7 @@ eng_req_send(mesa_engine* eng, eng_peer* per_u, eng_req* req_u)
 
   req_u->nex_d = eng->now_d + req_u->rto_d;
   req_u->rto_d = c3_min(req_u->rto_d * 2, ENG_RTO_MAX);
+  req_u->try_w++;
 }
 
 void
@@ -273,7 +274,15 @@ eng_req_wake(mesa_engine* eng, eng_peer* per_u)
   while ( req_u ) {
     eng_req* nex_u = req_u->nex_u;
     if ( req_u->nex_d <= eng->now_d ) {
-      eng_req_send(eng, per_u, req_u);
+      //  a comet that won't attest (or never existed): give up
+      //
+      if ( (REQ_PROOF == req_u->typ_e) && (req_u->try_w >= 6) ) {
+        eng_req_del(per_u, req_u);
+        eng_req_free(req_u);
+      }
+      else {
+        eng_req_send(eng, per_u, req_u);
+      }
     }
     req_u = nex_u;
   }

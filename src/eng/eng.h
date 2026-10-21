@@ -31,6 +31,7 @@
 #define ENG_PING_MS      25000       //  /app/ping nat-timeout
 #define ENG_POINT_MS     3600000     //  re-resolve active peers' keys
 #define ENG_CACHE_MAX    (64u << 20) //  served-message cache, bytes
+#define ENG_ALIEN_MAX    4096        //  peers without keys, at once
 
 /* dire: %for (we send pleas) or %bak (we send boons)
 */
@@ -107,6 +108,7 @@ typedef struct _eng_req {
   //  retry
   c3_d              nex_d;   //  next (re)send, ms
   c3_d              rto_d;
+  c3_w              try_w;   //  sends so far
   //  fetch state, once we've heard the first page
   eng_fetch*        fet_u;
   c3_o              aut_o;   //  first page authenticated
@@ -217,6 +219,7 @@ struct mesa_engine {
   c3_d          now_d;
   //  state
   eng_peer_map  per_u;
+  c3_w          ali_w;       //  peers without keys
   eng_line*     lin_u;       //  served-message cache, oldest first
   c3_d          lis_d;       //  cache bytes
   eng_wait*     wat_u;
@@ -259,6 +262,7 @@ void      eng_del(mesa_engine* eng, c3_y* key_y, c3_z key_z);
 eng_peer* eng_peer_get(mesa_engine* eng, u3_ship who_u);
 eng_peer* eng_peer_new(mesa_engine* eng, u3_ship who_u);
 eng_peer* eng_peer_make(mesa_engine* eng, u3_ship who_u);  //  get or new
+c3_o      eng_peer_evict(mesa_engine* eng);
 void      eng_peer_save(mesa_engine* eng, eng_peer* per_u);
 void      eng_peer_ask(mesa_engine* eng, eng_peer* per_u);
 c3_o      eng_peer_galaxy(mesa_engine* eng, eng_peer* per_u, c3_y* gal_y);

@@ -804,7 +804,14 @@ eng_hear_poke(mesa_engine* eng, mesa_lane lan_u, u3_mesa_pact* pac_u)
     return;
   }
 
-  per_u = eng_peer_make(eng, pok_u->her_u);
+  //  strangers cost a key lookup each; don't let them pile up
+  //
+  if ( !(per_u = eng_peer_get(eng, pok_u->her_u)) ) {
+    if ( (eng->ali_w >= ENG_ALIEN_MAX) && (c3n == eng_peer_evict(eng)) ) {
+      return;
+    }
+    per_u = eng_peer_new(eng, pok_u->her_u);
+  }
 
   if ( c3n == per_u->kno_o ) {
     if ( c3__pawn == u3_ship_rank(per_u->who_u) ) {

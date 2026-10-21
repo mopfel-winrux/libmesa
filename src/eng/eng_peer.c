@@ -54,7 +54,40 @@ eng_peer_new(mesa_engine* eng, u3_ship who_u)
   if ( eng_peer_map_is_end(eng_peer_map_insert(&eng->per_u, _key(who_u), per_u)) ) {
     mesa_fail(__FILE__, __LINE__, "out of memory");
   }
+  eng->ali_w++;
   return per_u;
+}
+
+/* eng_peer_evict(): forget a stranger we have nothing going on with
+*/
+c3_o
+eng_peer_evict(mesa_engine* eng)
+{
+  eng_peer* old_u = 0;
+
+  for ( eng_peer_map_itr itr_u = eng_peer_map_first(&eng->per_u);
+        !eng_peer_map_is_end(itr_u);
+        itr_u = eng_peer_map_next(itr_u) )
+  {
+    eng_peer* per_u = itr_u.data->val;
+
+    if (  (c3n == per_u->kno_o)
+       && !per_u->req_u
+       && !eng_flow_map_size(&per_u->flo_u)
+       && (eng->now_d >= per_u->ask_d + 60000) )
+    {
+      old_u = per_u;
+      break;
+    }
+  }
+
+  if ( !old_u ) {
+    return c3n;
+  }
+  eng_peer_map_erase(&eng->per_u, _key(old_u->who_u));
+  eng_peer_free(old_u);
+  eng->ali_w--;
+  return c3y;
 }
 
 eng_peer*
@@ -123,16 +156,20 @@ eng_peer_ask(mesa_engine* eng, eng_peer* per_u)
 {
   mesa_ship who = { .lo = per_u->who_u[0], .hi = per_u->who_u[1] };
 
-  //  comets attest for themselves
-  //
-  if ( c3__pawn == u3_ship_rank(per_u->who_u) ) {
-    return;
-  }
   if ( (c3y == per_u->ask_o) && (eng->now_d < per_u->ask_d + 30000) ) {
     return;
   }
   per_u->ask_o = c3y;
   per_u->ask_d = eng->now_d;
+
+  //  comets attest for themselves
+  //
+  if ( c3__pawn == u3_ship_rank(per_u->who_u) ) {
+    if ( c3n == per_u->kno_o ) {
+      eng_comet_proof(eng, per_u, (mesa_lane){ .kind = MESA_LANE_NONE });
+    }
+    return;
+  }
 
   if ( eng->hok_u.need_point ) {
     eng->hok_u.need_point(eng->hok_u.ctx, who);
@@ -364,6 +401,9 @@ eng_peer_breach(mesa_engine* eng, eng_peer* per_u)
 void
 eng_peer_known(mesa_engine* eng, eng_peer* per_u)
 {
+  if ( (c3n == per_u->kno_o) && eng->ali_w ) {
+    eng->ali_w--;
+  }
   per_u->kno_o = c3y;
   per_u->ask_o = c3n;
   eng_peer_save(eng, per_u);

@@ -5,12 +5,6 @@
 #include "eng.h"
 #include "mesa/ident.h"
 
-static mesa_lane
-_lane_none(void)
-{
-  return (mesa_lane){ .kind = MESA_LANE_NONE };
-}
-
 /* _peers(): snapshot the peer table (sending can add peers)
 */
 static eng_peer**
@@ -98,6 +92,7 @@ _load_row(void* arg, const uint8_t* key_y, size_t key_z,
         mesa_atom_get_bytes(mesa_at(27, val), 65, pas_y);
         eng_peer_set_keys(eng, per_u, _u64(mesa_at(12, val)),
                           _u64(mesa_at(26, val)), pas_y);
+        if ( (c3n == per_u->kno_o) && eng->ali_w ) eng->ali_w--;
         per_u->kno_o = c3y;
       }
     } break;
@@ -194,6 +189,7 @@ _free_state(mesa_engine* eng)
     eng_peer_free(itr_u.data->val);
   }
   eng_peer_map_clear(&eng->per_u);
+  eng->ali_w = 0;
   eng_cache_free(eng);
 }
 
@@ -605,6 +601,12 @@ mesa_engine_wake(mesa_engine* eng, uint64_t now)
 
     eng_req_wake(eng, p);
 
+    //  keep asking for the keys of peers we have messages for
+    //
+    if ( (c3n == p->kno_o) && eng_flow_map_size(&p->flo_u) ) {
+      eng_peer_ask(eng, p);
+    }
+
     //  refresh keys of peers we're talking to
     //
     if (  (c3y == p->kno_o) && p->req_u
@@ -632,7 +634,12 @@ mesa_engine_deadline(mesa_engine* eng)
         !eng_peer_map_is_end(itr_u);
         itr_u = eng_peer_map_next(itr_u) )
   {
-    dea_d = c3_min(dea_d, eng_req_deadline(itr_u.data->val));
+    eng_peer* per_u = itr_u.data->val;
+
+    dea_d = c3_min(dea_d, eng_req_deadline(per_u));
+    if ( (c3n == per_u->kno_o) && eng_flow_map_size(&per_u->flo_u) ) {
+      dea_d = c3_min(dea_d, per_u->ask_d + 30000);
+    }
   }
   return dea_d;
 }
@@ -771,16 +778,12 @@ _api_close(mesa_engine* eng, mesa_err err_e)
   return err_e;
 }
 
+/* _contact(): make sure we're getting [per_u]'s keys
+*/
 static void
 _contact(mesa_engine* eng, eng_peer* per_u)
 {
-  if ( c3y == per_u->kno_o ) {
-    return;
-  }
-  if ( c3__pawn == u3_ship_rank(per_u->who_u) ) {
-    eng_comet_proof(eng, per_u, _lane_none());
-  }
-  else {
+  if ( c3n == per_u->kno_o ) {
     eng_peer_ask(eng, per_u);
   }
 }
