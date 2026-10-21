@@ -67,14 +67,7 @@ pub fn build(b: *std.Build) !void {
     //  archive links from non-zig toolchains
     lib.bundle_ubsan_rt = true;
 
-    lib.addIncludePath(b.path("include"));
-    lib.addIncludePath(b.path("src"));
-    lib.addIncludePath(b.path("src/wire"));
-    lib.addIncludePath(b.path("vendor"));
-    lib.addIncludePath(b.path("vendor/murmur3"));
-    lib.addIncludePath(b.path("vendor/verstable"));
-    lib.addIncludePath(urcrypt.path("urcrypt"));
-    lib.addIncludePath(urcrypt.path("blake3"));
+    addIncludes(b, lib, urcrypt);
 
     lib.addCSourceFiles(.{
         .root = b.path("vendor"),
@@ -95,6 +88,10 @@ pub fn build(b: *std.Build) !void {
             "ship.c",
             "noun.c",
             "crypto.c",
+            "sha.c",
+            "ident.c",
+            "json.c",
+            "azimuth.c",
             "wire/bitset.c",
             "wire/lss.c",
             "wire/pact.c",
@@ -120,6 +117,8 @@ pub fn build(b: *std.Build) !void {
         .{ .name = "bitset-test", .file = "test/bitset_test.c", .defs = &.{} },
         .{ .name = "noun-test", .file = "test/noun_test.c", .defs = &.{} },
         .{ .name = "crypto-test", .file = "test/crypto_test.c", .defs = &.{} },
+        .{ .name = "ident-test", .file = "test/ident_test.c", .defs = &.{} },
+        .{ .name = "azimuth-test", .file = "test/azimuth_test.c", .defs = &.{} },
     };
 
     for (tests) |tst| {
@@ -135,14 +134,7 @@ pub fn build(b: *std.Build) !void {
         exe.linkLibrary(lib);
         exe.linkLibrary(crypt);
 
-        exe.addIncludePath(b.path("include"));
-        exe.addIncludePath(b.path("src"));
-        exe.addIncludePath(b.path("src/wire"));
-        exe.addIncludePath(b.path("vendor"));
-        exe.addIncludePath(b.path("vendor/murmur3"));
-        exe.addIncludePath(b.path("vendor/verstable"));
-        exe.addIncludePath(urcrypt.path("urcrypt"));
-        exe.addIncludePath(urcrypt.path("blake3"));
+        addIncludes(b, exe, urcrypt);
 
         exe.addCSourceFiles(.{
             .files = &.{tst.file},
@@ -156,6 +148,22 @@ pub fn build(b: *std.Build) !void {
         const build_only = b.step(tst.name, b.fmt("Build and run {s}", .{tst.name}));
         build_only.dependOn(&run.step);
     }
+}
+
+fn addIncludes(
+    b: *std.Build,
+    c: *std.Build.Step.Compile,
+    urcrypt: *std.Build.Dependency,
+) void {
+    c.addIncludePath(b.path("include"));
+    c.addIncludePath(b.path("src"));
+    c.addIncludePath(b.path("src/wire"));
+    c.addIncludePath(b.path("vendor"));
+    c.addIncludePath(b.path("vendor/murmur3"));
+    c.addIncludePath(b.path("vendor/verstable"));
+    c.addIncludePath(urcrypt.path("urcrypt"));
+    c.addIncludePath(urcrypt.path("blake3"));
+    c.addIncludePath(urcrypt.path("ed25519/src"));
 }
 
 fn libcrypt(

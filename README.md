@@ -12,6 +12,9 @@ Status:
   `jam`/`cue`/`mug`, and the mesa crypto layer (`++crypt` in ames.hoon):
   key derivation, XChaCha8, sealed paths, signatures and MACs. Both are
   checked byte-for-byte against Hoon.
+- **Step 3, identities (done).** Keyfiles (`@uw` jammed `+feed`/`+seed`),
+  fake-ship keys, comet mining (`+come:dawn`) and comet key checks, and
+  the azimuth `getPoint`/`getDns` request builder and response parser.
 
 ## Layout
 
@@ -23,6 +26,10 @@ src/
   noun.c        nouns: refcounting, jam/cue/mug/eq (iterative, no recursion)
   crypto.{c,h}  ames.hoon ++crypt: blake3 kdf/keyed, XChaCha8, seal-path,
                 encrypt/decrypt, ed25519 sign/verify, slar, keyed MACs
+  sha.{c,h}     +shay/+shax/+shal/+shas/+shaf
+  ident.c       keyfiles, fake keys, comet mining/checking (mesa/ident.h)
+  json.{c,h}    small JSON reader
+  azimuth.c     azimuth-rpc getPoint/getDns (mesa/azimuth.h)
   arena.h       bump allocator (from vere)
   wire/
     mesa.h      packet structs (from vere/pkg/vere/io/mesa/mesa.h)
@@ -43,7 +50,7 @@ Requires zig 0.15.2 (the same version vere uses).
 
 ```
 zig build                      # zig-out/lib/{libmesa.a,libmesa-urcrypt.a}
-zig build test                 # pact, lss, ship, bitset, noun, crypto tests
+zig build test                 # all unit tests
 zig build -Doptimize=ReleaseFast
 ```
 
@@ -52,7 +59,8 @@ That is everything mesa needs; there is no secp256k1, nettle or argon2.
 
 ## Test vectors
 
-`test/noun_test.c` and `test/crypto_test.c` embed values computed by Hoon
+`test/noun_test.c`, `test/crypto_test.c` and `test/ident_test.c` embed
+values computed by Hoon
 (`urbit eval`). The crypto vectors paste the ames `++crypt` arms verbatim.
 The ivory kernel available predates `+luck`/`+slar`/`+sign-octs-raw`, so the
 vectors use `+puck`/`+shar`/`+sign`, which compute the same values from seeds.
