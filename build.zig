@@ -48,6 +48,35 @@ pub fn build(b: *std.Build) !void {
     const crypt = libcrypt(b, target, optimize, urcrypt);
 
     //
+    //  sqlite (the default store)
+    //
+
+    const sqlite = b.dependency("sqlite", .{});
+    const sql = b.addLibrary(.{
+        .name = "mesa-sqlite",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    sql.linkLibC();
+    sql.addCSourceFiles(.{
+        .root = sqlite.path("."),
+        .files = &.{"sqlite3.c"},
+        .flags = &.{
+            "-O2",
+            "-fno-sanitize=all",
+            "-DSQLITE_DQS=0",
+            "-DSQLITE_DEFAULT_MEMSTATUS=0",
+            "-DSQLITE_OMIT_LOAD_EXTENSION",
+            "-DSQLITE_OMIT_DEPRECATED",
+            "-DSQLITE_LIKE_DOESNT_MATCH_BLOBS",
+        },
+    });
+    sql.installHeader(sqlite.path("sqlite3.h"), "sqlite3.h");
+
+    //
     //  libmesa
     //
 
@@ -62,6 +91,8 @@ pub fn build(b: *std.Build) !void {
 
     lib.linkLibC();
     lib.linkLibrary(crypt);
+    lib.linkLibrary(sql);
+    lib.addIncludePath(sqlite.path("."));
 
     //  Debug builds are compiled with UBSan; bundle its runtime so the
     //  archive links from non-zig toolchains
@@ -94,6 +125,7 @@ pub fn build(b: *std.Build) !void {
             "azimuth.c",
             "knot.c",
             "store_mem.c",
+            "store_sqlite.c",
             "eng/eng_util.c",
             "eng/eng_space.c",
             "eng/eng_serve.c",
@@ -112,6 +144,7 @@ pub fn build(b: *std.Build) !void {
 
     b.installArtifact(lib);
     b.installArtifact(crypt);
+    b.installArtifact(sql);
 
     //
     //  tests
@@ -129,6 +162,7 @@ pub fn build(b: *std.Build) !void {
         .{ .name = "ident-test", .file = "test/ident_test.c", .defs = &.{} },
         .{ .name = "azimuth-test", .file = "test/azimuth_test.c", .defs = &.{} },
         .{ .name = "engine-test", .file = "test/engine_test.c", .defs = &.{} },
+        .{ .name = "store-test", .file = "test/store_test.c", .defs = &.{} },
     };
 
     for (tests) |tst| {
@@ -143,6 +177,8 @@ pub fn build(b: *std.Build) !void {
         exe.linkLibC();
         exe.linkLibrary(lib);
         exe.linkLibrary(crypt);
+        exe.linkLibrary(sql);
+        exe.addIncludePath(sqlite.path("."));
 
         addIncludes(b, exe, urcrypt);
 

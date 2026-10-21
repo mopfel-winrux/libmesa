@@ -10,6 +10,10 @@
             .url = "https://github.com/urbit/urcrypt/archive/a4c229e9380636ace36325b6c8fe04eaee32a2ef.tar.gz",
             .hash = "N-V-__8AAFJ8TACpTWfH-dcjaICx9KJRA2pZhQ1A7VtF968Z",
         },
+        .sqlite = .{
+            .url = "https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz",
+            .hash = "N-V-__8AAJ-VwwDaAVSvGsN1z0uZTm2aAeq1ZO5tulayl2Cy",
+        },
     },
     .paths = .{
         "build.zig",

@@ -443,6 +443,9 @@ mesa_engine_open(const mesa_config* cfg, mesa_engine** out)
   eng->bad_o = c3n;
   eng->rel_o = c3n;
   eng->pif_o = c3n;
+  eng->pin_o = c3n;
+  eng->app_o = c3n;
+  eng->hok_o = c3n;
   eng->pin_d = cfg->now;
   eng_peer_map_init(&eng->per_u);
 
