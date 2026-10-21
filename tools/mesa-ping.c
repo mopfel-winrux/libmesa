@@ -15,6 +15,7 @@
 ///   -w /path        watch /path on the agent and print facts
 ///   -x /path        remote scry /path (e.g. /g/x/1/agent//1/foo)
 ///   -p port         UDP port to bind
+///   -P ~ship        print ~ship's azimuth point and exit
 ///
 /// Without -w or -x, pokes [agent] with [%noun text] and waits for the ack.
 
@@ -218,6 +219,26 @@ main(int argc, char* argv[])
     else if ( !strcmp(a, "-w") && i + 1 < argc ) { wat_c = argv[++i]; }
     else if ( !strcmp(a, "-x") && i + 1 < argc ) { scr = argv[++i]; }
     else if ( !strcmp(a, "-p") && i + 1 < argc ) { cfg.port = (uint16_t)atoi(argv[++i]); }
+    else if ( !strcmp(a, "-P") && i + 1 < argc ) {
+      mesa_ship  who;
+      mesa_point pot;
+      if ( !mesa_ship_parse(argv[++i], &who) ) _usage();
+      curl_global_init(CURL_GLOBAL_DEFAULT);
+      switch ( mesa_azimuth_fetch(0, who, &pot) ) {
+        case MESA_AZIMUTH_OK: {
+          char* spo = mesa_ship_render(pot.sponsor);
+          printf("rift %llu, life %llu, sponsor %s%s\npass ",
+                 (unsigned long long)pot.rift, (unsigned long long)pot.life,
+                 spo, pot.has_sponsor ? "" : " (escaped)");
+          for ( int j = 64; j >= 0; j-- ) printf("%02x", pot.pass[j]);
+          printf("\n");
+          free(spo);
+          return 0;
+        }
+        case MESA_AZIMUTH_NOT_FOUND: printf("not spawned\n"); return 1;
+        default: printf("lookup failed\n"); return 1;
+      }
+    }
     else if ( a[0] == '-' ) { _usage(); }
     else if ( pos == 0 ) { if ( !mesa_ship_parse(a, &her) ) _usage(); pos++; }
     else if ( pos == 1 ) { age = a; pos++; }

@@ -9,6 +9,7 @@
 
 #include <curl/curl.h>
 #include <sys/time.h>
+#include <unistd.h>
 #include <uv.h>
 
 #define HOST_DNS_MS   (5 * 60 * 1000)   //  refresh galaxy addresses
@@ -222,6 +223,33 @@ _curl_write(void* ptr, size_t siz, size_t nmb, void* arg)
   return len_z;
 }
 
+/* _ca_file(): our curl doesn't know the system's trust store; find it
+**             (or take $MESA_CA_FILE)
+*/
+static const c3_c*
+_ca_file(void)
+{
+  static const c3_c* can_c[] = {
+    "/etc/ssl/certs/ca-certificates.crt",        //  debian, ubuntu, alpine
+    "/etc/pki/tls/certs/ca-bundle.crt",          //  fedora, rhel
+    "/etc/ssl/ca-bundle.pem",                    //  opensuse
+    "/etc/ssl/cert.pem",                         //  macos, openbsd
+    "/usr/local/etc/openssl/cert.pem",
+    0,
+  };
+  const c3_c* env_c = getenv("MESA_CA_FILE");
+
+  if ( env_c ) {
+    return env_c;
+  }
+  for ( c3_w i = 0; can_c[i]; i++ ) {
+    if ( 0 == access(can_c[i], R_OK) ) {
+      return can_c[i];
+    }
+  }
+  return 0;
+}
+
 mesa_azimuth_err
 mesa_azimuth_fetch(const char* url, mesa_ship who, mesa_point* out)
 {
@@ -245,13 +273,16 @@ mesa_azimuth_fetch(const char* url, mesa_ship who, mesa_point* out)
   curl_easy_setopt(cul_u, CURLOPT_WRITEDATA, &buf_u);
   curl_easy_setopt(cul_u, CURLOPT_TIMEOUT, 30L);
   curl_easy_setopt(cul_u, CURLOPT_NOSIGNAL, 1L);
+  if ( _ca_file() ) {
+    curl_easy_setopt(cul_u, CURLOPT_CAINFO, _ca_file());
+  }
 
   res_e = curl_easy_perform(cul_u);
   if ( (CURLE_OK == res_e) && buf_u.base ) {
     ret_e = mesa_azimuth_point_parse(who, buf_u.len, buf_u.base, out);
   }
   else {
-    mesa_log("mesa: azimuth: %s", curl_easy_strerror(res_e));
+    mesa_log("mesa: azimuth: curl error %d", (c3_i)res_e);
   }
 
   curl_slist_free_all(hed_u);
