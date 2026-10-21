@@ -1,0 +1,22 @@
+.{
+    .name = .libmesa,
+    .version = "0.0.1",
+    .fingerprint = 0xa484debe1276f816,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        //  same pin as vere/ext/urcrypt; we only build the blake3,
+        //  chacha and ed25519 subset
+        .urcrypt = .{
+            .url = "https://github.com/urbit/urcrypt/archive/a4c229e9380636ace36325b6c8fe04eaee32a2ef.tar.gz",
+            .hash = "N-V-__8AAFJ8TACpTWfH-dcjaICx9KJRA2pZhQ1A7VtF968Z",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "include",
+        "src",
+        "vendor",
+        "LICENSE.txt",
+    },
+}
