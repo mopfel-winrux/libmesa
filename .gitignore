@@ -1,2 +1,7 @@
 .zig-cache/
 zig-out/
+*.key
+*.db
+*.db-*
+*.db.lock
+__pycache__/
