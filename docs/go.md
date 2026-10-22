@@ -20,7 +20,8 @@ go test ./...
 go build ./examples/...
 ```
 
-It needs a C compiler for cgo (gcc or clang) and Go 1.24 or later. The
+It needs a C compiler for cgo (gcc or clang) and Go 1.26 or later (what
+`modernc.org/sqlite` requires). The
 library has no Go dependencies; the tests and examples use
 `modernc.org/sqlite`, a database/sql driver in pure Go.
 
