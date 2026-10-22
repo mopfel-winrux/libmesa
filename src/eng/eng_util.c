@@ -158,6 +158,9 @@ eng_txn_close(mesa_engine* eng)
     return c3n;
   }
   if ( eng->sto_u->commit(eng->sto_u->ctx) ) {
+    //  don't leave the store mid-transaction for whoever reopens it
+    //
+    eng->sto_u->rollback(eng->sto_u->ctx);
     eng_txn_fail(eng);
     _eng_drop(eng);
     return c3n;

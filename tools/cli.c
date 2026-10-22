@@ -6,10 +6,12 @@
 
 #include "mesa/ident.h"
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
+#include <unistd.h>
 
 static int
 _read_key(const char* pat, mesa_ident* ide)
@@ -114,7 +116,13 @@ cli_open(cli* cli_u)
         return 0;
       }
       str = mesa_keyfile_render(&cli_u->ide);
-      if ( (f = fopen(kef, "w")) ) { fprintf(f, "%s\n", str); fclose(f); }
+      {
+        //  the keys are secret: owner-only, and never over another file
+        //
+        int fd = open(kef, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if ( (fd >= 0) && (f = fdopen(fd, "w")) ) { fprintf(f, "%s\n", str); fclose(f); }
+        else if ( fd >= 0 ) close(fd);
+      }
       free(str);
     }
     {

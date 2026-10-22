@@ -193,14 +193,19 @@ _load_state(mesa_engine* eng)
   //  peers first, so flows find their keys; everything else after
   //
   pre_y[0] = KEY_PEER;
-  if ( eng->sto_u->scan(eng->sto_u->ctx, pre_y, 1, _load_row, &ctx_u) ) {
-    if ( c3y == ctx_u.bad_o ) return c3n;
+  if (  (0 > eng->sto_u->scan(eng->sto_u->ctx, pre_y, 1, _load_row, &ctx_u))
+     || (c3y == ctx_u.bad_o) )
+  {
+    return c3n;
   }
   for ( c3_y typ_y = 'A'; typ_y <= 'Z'; typ_y++ ) {
     if ( (KEY_PEER == typ_y) || (KEY_IDENT == typ_y) ) continue;
     pre_y[0] = typ_y;
-    eng->sto_u->scan(eng->sto_u->ctx, pre_y, 1, _load_row, &ctx_u);
-    if ( c3y == ctx_u.bad_o ) return c3n;
+    if (  (0 > eng->sto_u->scan(eng->sto_u->ctx, pre_y, 1, _load_row, &ctx_u))
+       || (c3y == ctx_u.bad_o) )
+    {
+      return c3n;
+    }
   }
   return c3y;
 }
@@ -316,7 +321,9 @@ _boot(mesa_engine* eng, const mesa_config* cfg)
     //  no identity: an empty store is a fresh start
     //
     c3_o any_o = c3n;
-    sto_u->scan(sto_u->ctx, (const c3_y*)"", 0, _any_row, &any_o);
+    if ( 0 > sto_u->scan(sto_u->ctx, (const c3_y*)"", 0, _any_row, &any_o) ) {
+      return MESA_E_STORE;
+    }
     if ( c3y == any_o ) {
       return MESA_E_IDENTITY;
     }
@@ -370,8 +377,10 @@ _boot(mesa_engine* eng, const mesa_config* cfg)
   if ( c3n == eng_txn_open(eng) ) {
     return MESA_E_STORE;
   }
-  if ( c3y == wip_o ) {
-    sto_u->scan(sto_u->ctx, (const c3_y*)"", 0, _del_row, eng);
+  if (  (c3y == wip_o)
+     && (0 > sto_u->scan(sto_u->ctx, (const c3_y*)"", 0, _del_row, eng)) )
+  {
+    eng_txn_fail(eng);
   }
   eng->pin_o = pin_o;
   eng->pib_d = pib_d;

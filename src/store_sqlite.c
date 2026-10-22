@@ -200,19 +200,24 @@ _scan(void* ctx, const uint8_t* pre_y, size_t pre_z,
   }
 
   if ( end_z ) {
-    sqlite3_prepare_v2(sql_u->sql_u,
+    ret_i = sqlite3_prepare_v2(sql_u->sql_u,
       "SELECT k, v FROM mesa_kv WHERE k >= ?1 AND k < ?2 ORDER BY k",
       -1, &stm_u, 0);
-    sqlite3_bind_blob(stm_u, 1, pre_y, (c3_i)pre_z, SQLITE_STATIC);
-    sqlite3_bind_blob(stm_u, 2, end_y, (c3_i)end_z, SQLITE_STATIC);
+    if ( SQLITE_OK == ret_i ) {
+      sqlite3_bind_blob(stm_u, 2, end_y, (c3_i)end_z, SQLITE_STATIC);
+    }
   }
   else {
-    sqlite3_prepare_v2(sql_u->sql_u,
+    ret_i = sqlite3_prepare_v2(sql_u->sql_u,
       "SELECT k, v FROM mesa_kv WHERE k >= ?1 ORDER BY k", -1, &stm_u, 0);
-    sqlite3_bind_blob(stm_u, 1, pre_y, (c3_i)pre_z, SQLITE_STATIC);
   }
+  if ( SQLITE_OK != ret_i ) {
+    c3_free(end_y);
+    return -1;
+  }
+  sqlite3_bind_blob(stm_u, 1, pre_y, (c3_i)pre_z, SQLITE_STATIC);
 
-  while ( SQLITE_ROW == sqlite3_step(stm_u) ) {
+  while ( SQLITE_ROW == (ret_i = sqlite3_step(stm_u)) ) {
     _row* r;
     if ( len_z == cap_z ) {
       cap_z = c3_max(64, cap_z * 2);
@@ -228,6 +233,18 @@ _scan(void* ctx, const uint8_t* pre_y, size_t pre_z,
   }
   sqlite3_finalize(stm_u);
   c3_free(end_y);
+
+  //  a failed read: no partial results
+  //
+  if ( SQLITE_DONE != ret_i ) {
+    for ( c3_z i = 0; i < len_z; i++ ) {
+      c3_free(row_u[i].key_y);
+      c3_free(row_u[i].val_y);
+    }
+    c3_free(row_u);
+    return -1;
+  }
+  ret_i = 0;
 
   for ( c3_z i = 0; i < len_z; i++ ) {
     if ( !ret_i ) {

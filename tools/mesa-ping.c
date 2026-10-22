@@ -112,11 +112,11 @@ _tank(mesa_noun tan, int dep)
     mesa_noun sep = mesa_head(pre);
     mesa_noun ope = mesa_head(mesa_tail(pre));
     mesa_noun clo = mesa_tail(mesa_tail(pre));
-    if ( tag == 0x6d6c6170 ) {
-      clo = mesa_tail(mesa_tail(clo));
-      sep = mesa_head(mesa_tail(mesa_tail(pre)));
-    }
     _tape(ope);
+    if ( tag == 0x6d6c6170 ) {  //  %palm opens with q then r, closes with s
+      _tape(mesa_head(clo));
+      clo = mesa_tail(clo);
+    }
     for ( mesa_noun t = mesa_tail(mesa_tail(tan)); mesa_is_cell(t); t = mesa_tail(t) ) {
       _tank(mesa_head(t), dep + 1);
       if ( mesa_is_cell(mesa_tail(t)) ) _tape(sep);

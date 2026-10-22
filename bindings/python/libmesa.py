@@ -65,6 +65,8 @@ class Ship(C.Structure):
         return "Ship(%s)" % self
 
     def __eq__(self, other):
+        if not isinstance(other, Ship):
+            return NotImplemented
         return (self.lo, self.hi) == (other.lo, other.hi)
 
     def __hash__(self):
@@ -182,11 +184,17 @@ _sig("mesa_txn_commit", C.c_int, E)
 _sig("mesa_txn_abort", None, E)
 _sig("mesa_flow_open", C.c_int, E, Ship, C.POINTER(C.c_uint64))
 _sig("mesa_flow_cork", C.c_int, E, Ship, C.c_uint64)
+_sig("mesa_flow_plea", C.c_int, E, Ship, C.c_uint64, noun_t, noun_t, noun_t)
+_sig("mesa_flow_boon", C.c_int, E, Ship, C.c_uint64, noun_t)
+_sig("mesa_flow_done", C.c_int, E, Ship, C.c_uint64, noun_t)
+_sig("mesa_engine_peer", C.c_bool, E, Ship, C.POINTER(Point))
 _sig("mesa_keen", C.c_int, E, Ship, C.c_char_p)
+_sig("mesa_yawn", C.c_int, E, Ship, C.c_char_p)
 _sig("mesa_gall_poke", C.c_int, E, Ship, C.c_uint64, C.c_char_p, C.c_char_p, noun_t)
 _sig("mesa_gall_watch", C.c_int, E, Ship, C.c_uint64, C.c_char_p, noun_t)
 _sig("mesa_gall_leave", C.c_int, E, Ship, C.c_uint64, C.c_char_p)
 _sig("mesa_gall_fact", C.c_int, E, Ship, C.c_uint64, C.c_char_p, noun_t)
+_sig("mesa_gall_kick", C.c_int, E, Ship, C.c_uint64)
 _sig("mesa_gall_response", C.c_int, noun_t, C.POINTER(noun_t), C.POINTER(noun_t))
 _sig("mesa_gall_request_parse", C.c_int, noun_t, noun_t, noun_t, C.POINTER(GallRequest))
 
@@ -338,14 +346,18 @@ def tang(err):
             return tape(t.tail)
         if tag in ("rose", "palm"):
             pre = t.tail.head
-            sep, opn, cls = (pre.head, pre.tail.head, pre.tail.tail)
-            if tag == "palm":
-                sep, cls = pre.tail.tail.head, pre.tail.tail.tail.tail
+            if tag == "rose":           # [p=sep q=open r=close]
+                sep, opn, cls = (tape(pre.head), tape(pre.tail.head),
+                                 tape(pre.tail.tail))
+            else:                       # [p=sep q=open r=open s=close]
+                sep = tape(pre.head)
+                opn = tape(pre.tail.head) + tape(pre.tail.tail.head)
+                cls = tape(pre.tail.tail.tail)
             parts, kids = [], t.tail.tail
             while kids.is_cell:
                 parts.append(tank(kids.head, depth + 1))
                 kids = kids.tail
-            return tape(opn) + tape(sep).join(parts) + tape(cls)
+            return opn + sep.join(parts) + cls
         return ""
 
     def tape(t):
@@ -413,7 +425,8 @@ class Identity:
         if not lib.mesa_comet_mine(len(stars), arr, os.urandom(64), (1 << 64) - 1,
                                    C.byref(ide)):
             raise MesaError("mining failed")
-        with open(path_, "w") as f:
+        with os.fdopen(os.open(path_, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
+                       "w") as f:
             f.write(_take_str(lib.mesa_keyfile_render(C.byref(ide))) + "\n")
         return cls(ide)
 
@@ -435,7 +448,6 @@ class SqliteStore:
         self.db.execute("CREATE TABLE IF NOT EXISTS mesa_kv "
                         "(k BLOB PRIMARY KEY, v BLOB NOT NULL) WITHOUT ROWID")
         self.depth = 0
-        self.fresh = self.db.execute("SELECT count(*) FROM mesa_kv").fetchone()[0] == 0
 
         def guard(fn):
             def call(*a):
@@ -601,20 +613,22 @@ class Node:
         """create your tables in self.db (runs once, before the engine opens)"""
 
     def on_poke(self, her, agent, mark, noun_):
-        """a poke to [agent]; return True to ack, False (or raise) to nack,
-        or DROP for agents you don't run: no answer, so they resend"""
+        """a poke to [agent]; return True (or ACK) to ack, False (or NACK,
+        or raise) to nack, or DROP for agents you don't run: no answer, so
+        they resend"""
         return DROP
 
     def on_watch(self, her, bone, agent, path_):
-        """a subscription; return True to accept (then give facts with
-        fact()), False to refuse, or DROP"""
+        """a subscription; return True (or ACK) to accept (then give facts
+        with fact()), False (or NACK) to refuse, or DROP"""
         return DROP
 
     def on_leave(self, her, bone, agent):
         pass
 
     def on_plea(self, her, bone, vane, path_, payload):
-        """any other request; return ACK, NACK, LATER or DROP"""
+        """any other request; return ACK, NACK or DROP, or LATER and answer
+        it with done(her, bone) later"""
         return DROP
 
     def on_fact(self, her, bone, mark, noun_):
@@ -633,6 +647,12 @@ class Node:
     def on_peek(self, her, path_):
         """serve our namespace: return (mark, value) or None"""
         return None
+
+    def on_kick(self, her, bone):
+        """our subscription on [bone] was kicked (gall's [%x ~])"""
+
+    def on_corked(self, her, bone):
+        """our flow [bone] is closed for good"""
 
     def on_breach(self, her):
         pass
@@ -662,11 +682,40 @@ class Node:
         _check(lib.mesa_gall_fact(self.eng, her, bone, mark.encode(), noun(value)),
                "mesa_gall_fact")
 
+    def kick(self, her, bone):
+        """end their subscription on [bone]"""
+        _check(lib.mesa_gall_kick(self.eng, her, bone), "mesa_gall_kick")
+
     def cork(self, her, bone):
         _check(lib.mesa_flow_cork(self.eng, her, bone), "mesa_flow_cork")
 
+    def plea(self, her, bone, vane, path_, payload):
+        """a raw request on our flow [bone] (for vanes other than gall)"""
+        _check(lib.mesa_flow_plea(self.eng, her, bone, noun(vane), noun(path(path_)),
+                                  noun(payload)), "mesa_flow_plea")
+
+    def boon(self, her, bone, payload):
+        """a raw response on their flow [bone]"""
+        _check(lib.mesa_flow_boon(self.eng, her, bone, noun(payload)), "mesa_flow_boon")
+
+    def done(self, her, bone, error=None):
+        """answer a plea that on_plea returned LATER for: ack it, or nack it
+        with an error noun [tag tang]"""
+        _check(lib.mesa_flow_done(self.eng, her, bone,
+                                  NONE if error is None else noun(error)),
+               "mesa_flow_done")
+
+    def peer(self, her):
+        """the Point (keys, rift, sponsor) we have for [her], or None"""
+        pot = Point()
+        return pot if lib.mesa_engine_peer(self.eng, her, C.byref(pot)) else None
+
     def scry(self, her, path_):
         _check(lib.mesa_keen(self.eng, her, path_.encode()), "mesa_keen")
+
+    def unscry(self, her, path_):
+        """stop asking for [path_]; on_scry won't be called for it"""
+        _check(lib.mesa_yawn(self.eng, her, path_.encode()), "mesa_yawn")
 
     def txn(self):
         """`with node.txn():` group your writes and sends into one commit"""
@@ -771,8 +820,6 @@ class Node:
             req = GallRequest()
             kind = lib.mesa_gall_request_parse(vane, path_, payload, C.byref(req))
             agent = req.agent.decode()
-            if kind == GALL_SYSTEM:
-                return ACK
             if kind == GALL_POKE:
                 return _answer(self.on_poke(her, agent, Noun(req.mark).text(),
                                             Noun(req.noun)))
@@ -782,7 +829,8 @@ class Node:
             if kind == GALL_LEAVE:
                 self.on_leave(her, bone, agent)
                 return ACK
-            return self.on_plea(her, bone, Noun(vane), Noun(path_), Noun(payload))
+            return _answer(self.on_plea(her, bone, Noun(vane), Noun(path_),
+                                        Noun(payload)))
 
         self.in_hook = True
         try:
@@ -801,6 +849,8 @@ class Node:
         kind = lib.mesa_gall_response(payload, C.byref(mark), C.byref(val))
         if kind == GALL_FACT:
             self._guard(self.on_fact, her, bone, Noun(mark.value).text(), Noun(val.value))
+        elif kind == GALL_KICK:
+            self._guard(self.on_kick, her, bone)
         else:
             self._guard(self.on_boon, her, bone, Noun(payload))
 
@@ -810,7 +860,7 @@ class Node:
         self._guard(self.on_done, her, bone, err)
 
     def _corked(self, ctx, her, bone):
-        pass
+        self._guard(self.on_corked, Ship(her.lo, her.hi), bone)
 
     def _sage(self, ctx, her, path_, gage):
         her = Ship(her.lo, her.hi)
@@ -855,7 +905,7 @@ class Node:
                 lib.mesa_engine_hear(self.eng, lane, data, len(data), self._now())
         for fd in rd:
             if fd is not self.sock:
-                self.on_fd(fd)
+                self._outside(self.on_fd, fd)
         while not self.points.empty():
             who, pot = self.points.get()
             self.asking.discard(who)
@@ -865,7 +915,16 @@ class Node:
                 lib.mesa_engine_point(self.eng, C.byref(pot))
         if lib.mesa_engine_deadline(self.eng) <= self._now():
             lib.mesa_engine_wake(self.eng, self._now())
-        self.on_tick()
+        self._outside(self.on_tick)
+
+    @staticmethod
+    def _outside(fn, *a):
+        """run an application callback; an exception is logged, and doesn't
+        stop the loop"""
+        try:
+            fn(*a)
+        except Exception:
+            traceback.print_exc()
 
     def extra_fds(self):
         """more file descriptors for the loop to wait on (see on_fd)"""
@@ -892,10 +951,14 @@ class Node:
             lib.mesa_engine_close(self.eng)
             self.eng = None
             self.db.close()
+            self.sock.close()
+            self.store.lock.close()          # releases the flock
 
 def _answer(res):
-    if res is DROP or (type(res) is int and res == DROP):
-        return DROP
+    """a handler's answer: ACK, NACK, LATER or DROP as such; otherwise
+    truthy acks and falsy (None included) nacks"""
+    if type(res) is int and res in (ACK, NACK, LATER, DROP):
+        return res
     return ACK if res else NACK
 
 def _path_text(p):

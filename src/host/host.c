@@ -568,11 +568,8 @@ mesa_host_open(const mesa_host_config* cfg, mesa_host** out)
   con_u.hooks.breach = hos_u->app_u.breach ? _tr_breach : 0;
   con_u.now = _now();
 
-  if ( MESA_OK != (ret_i = mesa_engine_open(&con_u, &hos_u->eng_u)) ) {
-    goto fail;
-  }
-
-  //  the socket
+  //  the socket and timers first: opening the engine resumes flows, which
+  //  may already send and ask for keys
   //
   if ( !por_s && (MESA_CZAR == ran_e) ) {
     por_s = ( c3y == hos_u->fak_o ) ? (31337 + our.lo) : (13337 + our.lo);
@@ -582,25 +579,35 @@ mesa_host_open(const mesa_host_config* cfg, mesa_host** out)
 
   uv_udp_init(hos_u->lup_u, &hos_u->wax_u);
   hos_u->wax_u.data = hos_u;
-  if (  uv_udp_bind(&hos_u->wax_u, (const struct sockaddr*)&add_u, 0)
-     || uv_udp_recv_start(&hos_u->wax_u, _host_alloc_cb, _host_recv_cb) )
-  {
-    mesa_log("mesa: can't bind udp port %u", por_s);
-    mesa_engine_close(hos_u->eng_u);
-    uv_close((uv_handle_t*)&hos_u->wax_u, 0);
-    uv_run(hos_u->lup_u, UV_RUN_NOWAIT);
-    ret_i = MESA_HOST_E_SOCKET;
-    goto fail;
-  }
-
   uv_timer_init(hos_u->lup_u, &hos_u->tim_u);
   hos_u->tim_u.data = hos_u;
   uv_idle_init(hos_u->lup_u, &hos_u->idl_u);
   hos_u->idl_u.data = hos_u;
 
+  if ( uv_udp_bind(&hos_u->wax_u, (const struct sockaddr*)&add_u, 0) ) {
+    mesa_log("mesa: can't bind udp port %u", por_s);
+    ret_i = MESA_HOST_E_SOCKET;
+    goto fail_uv;
+  }
+  if ( MESA_OK != (ret_i = mesa_engine_open(&con_u, &hos_u->eng_u)) ) {
+    goto fail_uv;
+  }
+  if ( uv_udp_recv_start(&hos_u->wax_u, _host_alloc_cb, _host_recv_cb) ) {
+    mesa_log("mesa: can't read udp port %u", por_s);
+    mesa_engine_close(hos_u->eng_u);
+    ret_i = MESA_HOST_E_SOCKET;
+    goto fail_uv;
+  }
+
   mesa_host_kick(hos_u);
   *out = hos_u;
   return MESA_OK;
+
+fail_uv:
+  uv_close((uv_handle_t*)&hos_u->wax_u, 0);
+  uv_close((uv_handle_t*)&hos_u->tim_u, 0);
+  uv_close((uv_handle_t*)&hos_u->idl_u, 0);
+  uv_run(hos_u->lup_u, UV_RUN_NOWAIT);
 
 fail:
   c3_free(hos_u->azi_c);

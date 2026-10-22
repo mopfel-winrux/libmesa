@@ -11,7 +11,7 @@
 /// mesa_flow_cork() once the leave is acked.
 ///
 /// Serving: a ship's gall pokes or watches "our agents" with the same
-/// pleas; decode them in hooks.plea with mesa_gall_request(), and send
+/// pleas; decode them in hooks.plea with mesa_gall_request_parse(), and send
 /// facts and kicks on that bone with mesa_gall_fact()/mesa_gall_kick().
 
 #ifndef MESA_GALL_H
@@ -48,7 +48,9 @@ typedef enum mesa_gall_request_kind {
   MESA_GALL_WATCH    = 2,  //  [%s path]
   MESA_GALL_WATCH_AS = 3,  //  [%l mark path]
   MESA_GALL_LEAVE    = 4,  //  [%u ~]
-  MESA_GALL_SYSTEM   = 5,  //  gall's own flows (/gf flubs, /gk keys): ack
+  MESA_GALL_SYSTEM   = 5,  //  gall's own flows (/gf flubs, /gk keys); the
+                           //  engine answers these itself, so hooks.plea
+                           //  never sees them
 } mesa_gall_request_kind;
 
 typedef struct mesa_gall_request {
