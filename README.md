@@ -16,8 +16,9 @@ remote-scries and is poked by a fake `~zod` running stock vere and Arvo
 restarts.
 
 On the live network, a freshly mined libmesa comet pokes `~zod` directly
-(`%ping` acks; `%hood` nacks with its stack trace), with its state persisted
-across runs.
+(`%ping` acks; `%hood` nacks with its stack trace) and a planet under a
+star, and is poked back by that planet (`|hi ~comet` from its dojo, routed
+through the comet's galaxy), with its state persisted across runs.
 
 ## Using it
 
