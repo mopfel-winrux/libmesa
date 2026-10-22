@@ -71,7 +71,7 @@ guestbook (`:~our/guestbook 'hello!'` from a dojo), subscribe to
 It keeps its tables in the engine's own SQLite database, so each
 signature is recorded exactly once, and it POSTs new entries to a webhook
 through an outbox drained after each commit (`-H url`; at least once,
-with an id to deduplicate on). `-W port` serves a live page of the
+with an id to deduplicate on). `-W [addr:]port` serves a live page of the
 guestbook at `http://addr:port/` (default 127.0.0.1).
 
 ### Layers
