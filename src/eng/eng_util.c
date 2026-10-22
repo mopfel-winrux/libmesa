@@ -310,7 +310,7 @@ eng_path_noun(const c3_c* pat_c)
 c3_c*
 eng_ship_text(u3_ship who_u)
 {
-  static c3_c buf_c[64];
+  static _Thread_local c3_c buf_c[64];  //  one per engine thread
   c3_c*       who_c = u3_ship_to_string(who_u);
 
   snprintf(buf_c, sizeof(buf_c), "%s", who_c);

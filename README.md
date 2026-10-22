@@ -64,6 +64,7 @@ mesa_host_run(hos);
 - [The store](docs/store.md): the persistence contract, its key layout,
   and writing your own.
 - [Python](docs/python.md): the ctypes binding and its examples.
+- [Go](docs/go.md): the cgo binding, a ping tool and a Tlon DM bot.
 
 The headers in `include/mesa/` are the API reference.
 
@@ -119,6 +120,17 @@ so a crash never loses or repeats one.
 ```
 python3 bindings/python/examples/tlon_dms.py -k ~sampel-palnet.key -s dms.db --web 127.0.0.1:8474
 python3 bindings/python/examples/tlon_dms.py -c -s dms.db --web 8474   # as a comet
+```
+
+`bindings/go` is package `mesa`, a cgo binding over the static libraries:
+a `Node` driven from one goroutine with Go's own UDP, timers and HTTP,
+and a store over any database/sql SQLite driver that the application
+shares for exactly-once processing. `examples/dmbot` is a Tlon DM bot
+that sends each reply in the same transaction that acks the message it
+answers.
+
+```
+cd bindings/go && go run ./examples/dmbot -c -s bot.db
 ```
 
 The engine never does I/O: the host feeds it datagrams (`mesa_engine_hear`),
@@ -316,6 +328,7 @@ tools/          mesa-ping, and the options it shares (cli.c)
 docs/           guides (see Documentation)
 examples/       guestbook.c
 bindings/python/ libmesa.py (ctypes), examples/tlon_dms.py
+bindings/go/    package mesa (cgo), examples/ping, examples/dmbot
 test/           unit tests; e2e/ interop test
 vendor/         c3 (from vere/pkg/c3), murmur3, verstable
 ext/            libuv, curl, OpenSSL, nasm build wrappers (from vere)
