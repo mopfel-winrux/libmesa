@@ -16,6 +16,8 @@
 ///   -x /path        remote scry /path (e.g. /g/x/1/agent//1/foo)
 ///   -p port         UDP port to bind
 ///   -P ~ship        print ~ship's azimuth point and exit
+///   -l              listen: stay online, ack every poke and print it
+///                   (try `|hi ~our` from a ship's dojo)
 ///
 /// Without -w or -x, pokes [agent] with [%noun text] and waits for the ack.
 
@@ -36,6 +38,7 @@ static mesa_ship  her;
 static uint64_t   bon_d;
 static int        ret_i = 1;
 static const char* wat_c;
+static int         lis_i;
 
 static void
 _quit(int code)
@@ -107,7 +110,7 @@ _done(void* ctx, mesa_ship who, uint64_t bone, mesa_noun error)
 {
   if ( MESA_NONE == error ) {
     printf(wat_c ? "watching\n" : "ack\n");
-    if ( !wat_c ) _quit(0);
+    if ( !wat_c && !lis_i ) _quit(0);
   }
   else {
     //  error is [term tang]
@@ -166,12 +169,24 @@ _plea(void* ctx, mesa_ship who, uint64_t bone, mesa_noun vane,
 {
   mesa_gall_request req;
 
-  //  ack gall's own flows; refuse anything else
+  //  ack gall's own flows; when listening, ack and print pokes too
   //
-  if ( MESA_GALL_SYSTEM == mesa_gall_request_parse(vane, path, payload, &req) ) {
-    return MESA_ACK;
+  switch ( mesa_gall_request_parse(vane, path, payload, &req) ) {
+    case MESA_GALL_SYSTEM: return MESA_ACK;
+    case MESA_GALL_POKE: {
+      char* src = mesa_ship_render(who);
+      char* mar = mesa_atom_get_cord(req.mark);
+      int   ack = lis_i;
+      printf("%s: poke %%%s %%%s ", src, req.agent, mar);
+      _print("", req.noun);
+      if ( !ack ) printf("  (refused: not listening)\n");
+      fflush(stdout);
+      free(src);
+      free(mar);
+      return ack ? MESA_ACK : MESA_NACK;
+    }
+    default: return MESA_NACK;
   }
-  return MESA_NACK;
 }
 
 /* comets need a star that's online to sponsor them
@@ -210,7 +225,7 @@ static void
 _usage(void)
 {
   fprintf(stderr, "usage: mesa-ping (-F ~ship | -k keyfile | -c) [-s db] [-b] "
-                  "[-w /path | -x /path] [-p port] ~ship agent [text]\n");
+                  "[-w /path | -x /path] [-p port] [-l] [~ship agent [text]]\n");
   exit(2);
 }
 
@@ -245,6 +260,7 @@ main(int argc, char* argv[])
       hav = 1;
     }
     else if ( !strcmp(a, "-c") ) { hav = 2; }
+    else if ( !strcmp(a, "-l") ) { lis_i = 1; }
     else if ( !strcmp(a, "-s") && i + 1 < argc ) { db = argv[++i]; }
     else if ( !strcmp(a, "-b") ) { cfg.engine.breached = true; }
     else if ( !strcmp(a, "-w") && i + 1 < argc ) { wat_c = argv[++i]; }
@@ -275,7 +291,7 @@ main(int argc, char* argv[])
     else if ( pos == 1 ) { age = a; pos++; }
     else if ( pos == 2 ) { txt = a; pos++; }
   }
-  if ( !hav || pos < (scr ? 1 : 2) ) _usage();
+  if ( !hav || pos < (lis_i ? 0 : scr ? 1 : 2) ) _usage();
 
   curl_global_init(CURL_GLOBAL_DEFAULT);
 
@@ -326,7 +342,13 @@ main(int argc, char* argv[])
     return 2;
   }
 
-  {
+  if ( lis_i && !pos ) {
+    char* who = mesa_ship_render(ide.who);
+    printf("listening as %s\n", who);
+    fflush(stdout);
+    free(who);
+  }
+  else {
     mesa_engine* eng = mesa_host_engine(hos);
 
     if ( scr ) {

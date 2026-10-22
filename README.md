@@ -49,7 +49,8 @@ mesa_host_run(hos);
 
 `tools/mesa-ping.c` is a complete example: `mesa-ping -c ~sampel-palnet
 my-agent hello` mines a comet and pokes an agent; `-w /path` watches,
-`-x /g/x/1/agent//1/path` remote-scries. Set `MESA_TRACE=1` to log every
+`-x /g/x/1/agent//1/path` remote-scries, and `-l` stays online acking and
+printing incoming pokes (`|hi ~comet` from a dojo). Set `MESA_TRACE=1` to log every
 datagram libmesa-host sends and hears.
 
 ```
