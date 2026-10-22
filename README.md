@@ -15,6 +15,10 @@ remote-scries and is poked by a fake `~zod` running stock vere and Arvo
 (see [Interop test](#interop-test)), with state persisted in SQLite across
 restarts.
 
+On the live network, a freshly mined libmesa comet pokes `~zod` directly
+(`%ping` acks; `%hood` nacks with its stack trace), with its state persisted
+across runs.
+
 ## Using it
 
 ```c
@@ -45,7 +49,15 @@ mesa_host_run(hos);
 
 `tools/mesa-ping.c` is a complete example: `mesa-ping -c ~sampel-palnet
 my-agent hello` mines a comet and pokes an agent; `-w /path` watches,
-`-x /g/x/1/agent//1/path` remote-scries.
+`-x /g/x/1/agent//1/path` remote-scries. Set `MESA_TRACE=1` to log every
+datagram libmesa-host sends and hears.
+
+```
+$ mesa-ping -c -s comet.db ~zod ping hi
+mining a comet under 5 stars...
+we are ~waltus-fonser-bospen-larmex--nommet-donryt-nopful-litzod
+ack
+```
 
 ### Layers
 

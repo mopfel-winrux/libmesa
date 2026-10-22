@@ -64,6 +64,44 @@ _print(const char* pre, mesa_noun som)
   }
 }
 
+/* _tank(): print a tank on one line (+ram)
+*/
+static void
+_tape(mesa_noun tap)
+{
+  for ( ; mesa_is_cell(tap); tap = mesa_tail(tap) ) {
+    uint64_t c;
+    if ( mesa_atom_get_u64(mesa_head(tap), &c) && c < 256 ) putchar((int)c);
+  }
+}
+
+static void
+_tank(mesa_noun tan, int dep)
+{
+  uint64_t tag;
+
+  if ( dep > 32 || !mesa_is_cell(tan) || !mesa_atom_get_u64(mesa_head(tan), &tag) ) return;
+  if ( tag == 0x6661656c ) {  //  %leaf
+    _tape(mesa_tail(tan));
+  }
+  else if ( tag == 0x65736f72 || tag == 0x6d6c6170 ) {  //  %rose [p q r], %palm [p q r s]
+    mesa_noun pre = mesa_head(mesa_tail(tan));
+    mesa_noun sep = mesa_head(pre);
+    mesa_noun ope = mesa_head(mesa_tail(pre));
+    mesa_noun clo = mesa_tail(mesa_tail(pre));
+    if ( tag == 0x6d6c6170 ) {
+      clo = mesa_tail(mesa_tail(clo));
+      sep = mesa_head(mesa_tail(mesa_tail(pre)));
+    }
+    _tape(ope);
+    for ( mesa_noun t = mesa_tail(mesa_tail(tan)); mesa_is_cell(t); t = mesa_tail(t) ) {
+      _tank(mesa_head(t), dep + 1);
+      if ( mesa_is_cell(mesa_tail(t)) ) _tape(sep);
+    }
+    _tape(clo);
+  }
+}
+
 static void
 _done(void* ctx, mesa_ship who, uint64_t bone, mesa_noun error)
 {
@@ -72,7 +110,15 @@ _done(void* ctx, mesa_ship who, uint64_t bone, mesa_noun error)
     if ( !wat_c ) _quit(0);
   }
   else {
+    //  error is [term tang]
     printf("nack\n");
+    if ( mesa_is_cell(error) ) {
+      for ( mesa_noun t = mesa_tail(error); mesa_is_cell(t); t = mesa_tail(t) ) {
+        printf("  ");
+        _tank(mesa_head(t), 0);
+        printf("\n");
+      }
+    }
     _quit(1);
   }
   fflush(stdout);
@@ -130,37 +176,22 @@ _plea(void* ctx, mesa_ship who, uint64_t bone, mesa_noun vane,
 
 /* comets need a star that's online to sponsor them
 */
-static size_t
-_grow(void* ptr, size_t siz, size_t nmb, void* arg)
-{
-  uv_buf_t* buf = arg;
-  buf->base = realloc(buf->base, buf->len + siz * nmb);
-  memcpy(buf->base + buf->len, ptr, siz * nmb);
-  buf->len += siz * nmb;
-  return siz * nmb;
-}
-
 static int
 _mine(mesa_ident* ide)
 {
-  CURL*     cul = curl_easy_init();
-  uv_buf_t  buf = { 0, 0 };
+  size_t    siz;
+  uint8_t*  buf = mesa_host_get("https://bootstrap.urbit.org/comet-stars.jam", &siz);
   mesa_noun lis;
   mesa_ship sta[4096];
   size_t    len = 0;
   uint8_t   eny[64];
 
-  curl_easy_setopt(cul, CURLOPT_URL, "https://bootstrap.urbit.org/comet-stars.jam");
-  curl_easy_setopt(cul, CURLOPT_WRITEFUNCTION, _grow);
-  curl_easy_setopt(cul, CURLOPT_WRITEDATA, &buf);
-  if ( CURLE_OK != curl_easy_perform(cul) ) {
+  if ( !buf ) {
     fprintf(stderr, "can't download comet-stars.jam\n");
     return 0;
   }
-  curl_easy_cleanup(cul);
-
-  lis = mesa_cue_bytes(buf.len, (uint8_t*)buf.base);
-  free(buf.base);
+  lis = mesa_cue_bytes(siz, buf);
+  free(buf);
   if ( MESA_NONE == lis ) return 0;
   for ( mesa_noun i = lis; mesa_is_cell(i) && len < 4096; i = mesa_tail(i) ) {
     uint64_t s;

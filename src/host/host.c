@@ -41,6 +41,7 @@ struct mesa_host {
   uv_timer_t      tim_u;
   uv_idle_t       idl_u;
   c3_o            fak_o;
+  c3_o            trc_o;      //  $MESA_TRACE: log every datagram
   c3_c*           azi_c;
   c3_c*           dns_c;
   _host_need*     ned_u;
@@ -173,6 +174,13 @@ _host_send(void* ctx, mesa_lane lan_u, const uint8_t* buf_y, size_t len_z)
     return;
   }
 
+  if ( c3y == hos_u->trc_o ) {
+    c3_w ip_w = ntohl(add_u.sin_addr.s_addr);
+    mesa_log("mesa: send %zu to %u.%u.%u.%u:%u", len_z,
+             ip_w >> 24, (ip_w >> 16) & 0xff, (ip_w >> 8) & 0xff, ip_w & 0xff,
+             ntohs(add_u.sin_port));
+  }
+
   //  datagrams are small and the engine retransmits; never block
   //
   uv_udp_try_send(&hos_u->wax_u, &buf_u, 1, (const struct sockaddr*)&add_u);
@@ -199,6 +207,11 @@ _host_recv_cb(uv_udp_t* wax_u, ssize_t nrd_i, const uv_buf_t* buf_u,
                         .ip   = ntohl(sin_u->sin_addr.s_addr),
                         .port = ntohs(sin_u->sin_port) };
 
+    if ( c3y == hos_u->trc_o ) {
+      mesa_log("mesa: hear %zd from %u.%u.%u.%u:%u", nrd_i,
+               lan_u.ip >> 24, (lan_u.ip >> 16) & 0xff, (lan_u.ip >> 8) & 0xff,
+               lan_u.ip & 0xff, lan_u.port);
+    }
     mesa_engine_hear(hos_u->eng_u, lan_u, (const uint8_t*)buf_u->base,
                      (size_t)nrd_i, _now());
     mesa_host_kick(hos_u);
@@ -248,6 +261,40 @@ _ca_file(void)
     }
   }
   return 0;
+}
+
+uint8_t*
+mesa_host_get(const char* url, size_t* len)
+{
+  CURL*    cul_u = curl_easy_init();
+  uv_buf_t buf_u = { .base = 0, .len = 0 };
+  CURLcode res_e;
+  long     cod_l = 0;
+
+  if ( !cul_u ) {
+    return 0;
+  }
+  curl_easy_setopt(cul_u, CURLOPT_URL, url);
+  curl_easy_setopt(cul_u, CURLOPT_WRITEFUNCTION, _curl_write);
+  curl_easy_setopt(cul_u, CURLOPT_WRITEDATA, &buf_u);
+  curl_easy_setopt(cul_u, CURLOPT_TIMEOUT, 30L);
+  curl_easy_setopt(cul_u, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(cul_u, CURLOPT_FOLLOWLOCATION, 1L);
+  if ( _ca_file() ) {
+    curl_easy_setopt(cul_u, CURLOPT_CAINFO, _ca_file());
+  }
+
+  res_e = curl_easy_perform(cul_u);
+  curl_easy_getinfo(cul_u, CURLINFO_RESPONSE_CODE, &cod_l);
+  curl_easy_cleanup(cul_u);
+
+  if ( (CURLE_OK != res_e) || (200 != cod_l) || !buf_u.base ) {
+    mesa_log("mesa: %s: curl error %d, http %ld", url, (c3_i)res_e, cod_l);
+    c3_free(buf_u.base);
+    return 0;
+  }
+  *len = buf_u.len;
+  return (uint8_t*)buf_u.base;
 }
 
 mesa_azimuth_err
@@ -442,6 +489,7 @@ mesa_host_open(const mesa_host_config* cfg, mesa_host** out)
 
   hos_u->app_u = con_u.hooks;
   hos_u->fak_o = cfg->fake ? c3y : c3n;
+  hos_u->trc_o = getenv("MESA_TRACE") ? c3y : c3n;
   hos_u->azi_c = strdup(cfg->azimuth_url ? cfg->azimuth_url : MESA_AZIMUTH_URL);
   hos_u->dns_c = strdup(cfg->dns_domain ? cfg->dns_domain : "urbit.org");
   hos_u->lup_u = cfg->loop ? cfg->loop : uv_default_loop();

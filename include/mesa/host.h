@@ -76,4 +76,9 @@ void         mesa_host_close(mesa_host* hos);
 mesa_azimuth_err
 mesa_azimuth_fetch(const char* url, mesa_ship who, mesa_point* out);
 
+/* mesa_host_get(): blocking HTTPS GET (for tools); malloc'd body or 0
+*/
+uint8_t*
+mesa_host_get(const char* url, size_t* len);
+
 #endif /* ifndef MESA_HOST_H */
