@@ -151,6 +151,11 @@ struct _eng_peer {
   c3_o          jao_o;       //  jael /public-keys flow open (they're a parent)
   c3_d          jab_d;       //    its bone
   c3_o          moa_o;       //  moon: asked our parent for our keys
+  //  classic ames (eng_ames.c)
+  c3_o          aho_o;       //  we've asked them to move to mesa
+  c3_d          ahb_d;       //    on this bone
+  c3_d          ahd_d;       //    last asked (ms)
+  c3_d          ahk_d;       //    last acked (ms)
   //  ossuary
   c3_d          bon_d;       //  next-bone
   eng_flow_map  flo_u;
@@ -250,6 +255,7 @@ struct mesa_engine {
 */
 void      eng_send(mesa_engine* eng, mesa_lane lan_u, c3_y* buf_y, c3_z len_z);
 void      eng_send_pact(mesa_engine* eng, mesa_lane lan_u, u3_mesa_pact* pac_u);
+void      eng_trace(const c3_c* dir_c, u3_mesa_pact* pac_u);
 c3_o      eng_lanes_eq(mesa_lane a, mesa_lane b);
 c3_c*     eng_path_text(mesa_noun pax);      //  "/a/b" from a path noun
 mesa_noun eng_path_noun(const c3_c* pat_c);  //  path noun from "/a/b"
@@ -348,6 +354,12 @@ void      eng_flow_done(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
 void      eng_flow_resume(mesa_engine* eng, eng_peer* per_u);
 void      eng_flow_halt(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u);
 void      eng_flow_unhalt(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u);
+
+/* eng_ames.c: classic ames, to move peers to mesa
+*/
+void      eng_ames_hear(mesa_engine* eng, mesa_lane lan_u,
+                        const c3_y* buf_y, c3_z len_z);
+void      eng_ames_ahoy(mesa_engine* eng, eng_peer* per_u, mesa_lane lan_u);
 
 /* eng_sys.c: system flows (gall /gf /gk, jael /public-keys), points
 */

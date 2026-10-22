@@ -93,7 +93,17 @@ _load_row(void* arg, const uint8_t* key_y, size_t key_z,
           per_u->jao_o = c3y;
           per_u->jab_d = _u64(mesa_at(29, sys));
         }
-        per_u->moa_o = _u64(mesa_at(15, sys)) ? c3y : c3n;
+        if ( mesa_is_cell(mesa_at(15, sys)) ) {
+          //  [moon-asked=? ahoy=(unit bone)]
+          per_u->moa_o = _u64(mesa_at(30, sys)) ? c3y : c3n;
+          if ( mesa_is_cell(mesa_at(31, sys)) ) {
+            per_u->aho_o = c3y;
+            per_u->ahb_d = _u64(mesa_at(63, sys));
+          }
+        }
+        else {
+          per_u->moa_o = _u64(mesa_at(15, sys)) ? c3y : c3n;
+        }
       }
       else {
         per_u->bon_d = _u64(mesa_at(15, val));
@@ -584,9 +594,17 @@ mesa_engine_hear(mesa_engine* eng, mesa_lane from,
 
   _tick(eng, now);
 
-  if (  (c3y == eng->bad_o) || (len > PACT_SIZE)
-     || (c3n == mesa_is_new_pact((c3_y*)buf, (c3_h)len)) )
-  {
+  if ( (c3y == eng->bad_o) || (len > PACT_SIZE) ) {
+    return;
+  }
+
+  //  classic ames: we only ever ask its sender to move to mesa
+  //
+  if ( c3n == mesa_is_new_pact((c3_y*)buf, (c3_h)len) ) {
+    if ( c3y == eng_txn_open(eng) ) {
+      eng_ames_hear(eng, from, buf, len);
+      eng_txn_close(eng);
+    }
     return;
   }
 
@@ -595,6 +613,7 @@ mesa_engine_hear(mesa_engine* eng, mesa_lane from,
   if ( mesa_sift_pact_from_buf(&pac_u, buf_y, (c3_h)len) ) {
     return;
   }
+  eng_trace("hear", &pac_u);
 
   if ( c3n == eng_txn_open(eng) ) {
     return;

@@ -24,12 +24,53 @@ eng_send(mesa_engine* eng, mesa_lane lan_u, c3_y* buf_y, c3_z len_z)
   eng->ont_u  = &out_u->nex_u;
 }
 
+/* eng_trace(): $MESA_TRACE logs every packet's names
+*/
+static void
+_trace_name(const c3_c* lab_c, u3_mesa_name* nam_u)
+{
+  mesa_log("mesa:   %s %s r%u f%" PRIu64 "%s /%.*s", lab_c,
+           eng_ship_text(nam_u->her_u), (unsigned)nam_u->rif_h, nam_u->fra_d,
+           ( c3y == nam_u->nit_o ) ? ( c3y == nam_u->aut_o ? " auth" : " init" ) : "",
+           (int)c3_min(nam_u->pat_s, 160), nam_u->pat_c);
+}
+
+void
+eng_trace(const c3_c* dir_c, u3_mesa_pact* pac_u)
+{
+  static c3_i tra_i = -1;
+
+  if ( tra_i < 0 ) {
+    tra_i = getenv("MESA_TRACE") ? 1 : 0;
+  }
+  if ( !tra_i ) {
+    return;
+  }
+  switch ( pac_u->hed_u.typ_y ) {
+    case PACT_PEEK: {
+      mesa_log("mesa: %s peek", dir_c);
+      _trace_name("name", &pac_u->pek_u.nam_u);
+    } break;
+    case PACT_PAGE: {
+      mesa_log("mesa: %s page (%" PRIu64 " bytes)", dir_c, pac_u->pag_u.dat_u.tob_d);
+      _trace_name("name", &pac_u->pag_u.nam_u);
+    } break;
+    case PACT_POKE: {
+      mesa_log("mesa: %s poke (%" PRIu64 " bytes)", dir_c, pac_u->pok_u.dat_u.tob_d);
+      _trace_name("ack ", &pac_u->pok_u.nam_u);
+      _trace_name("pay ", &pac_u->pok_u.pay_u);
+    } break;
+    default: break;
+  }
+}
+
 void
 eng_send_pact(mesa_engine* eng, mesa_lane lan_u, u3_mesa_pact* pac_u)
 {
   c3_y* buf_y = c3_calloc(PACT_SIZE);
   c3_h  len_h;
 
+  eng_trace("send", pac_u);
   pac_u->hed_u.pro_y = MESA_VER;
   len_h = mesa_etch_pact_to_buf(buf_y, PACT_SIZE, pac_u);
   eng_send(eng, lan_u, buf_y, len_h);

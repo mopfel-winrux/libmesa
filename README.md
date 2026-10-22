@@ -56,7 +56,7 @@ mesa_host_run(hos);
 my-agent hello` mines a comet and pokes an agent; `-w /path` watches,
 `-x /g/x/1/agent//1/path` remote-scries, and `-l` stays online acking and
 printing incoming pokes (`|hi ~comet` from a dojo). Set `MESA_TRACE=1` to log every
-datagram libmesa-host sends and hears.
+datagram libmesa-host sends and hears, and what each packet is.
 
 ```
 $ mesa-ping -c -s comet.db ~zod ping hi
@@ -142,8 +142,18 @@ talked to anyone:
 - It refuses a store that belongs to another ship or a later life or rift
   (`MESA_E_IDENTITY`).
 
-A planet that previously ran as a real ship (classic ames) has peers that
-remember it there; they ignore mesa from it until it breaches.
+### Ships that still speak classic ames to us
+
+A ship that knew an identity before mesa, or learned its keys before
+hearing from it (a planet learns its own moons' keys from `|moon`), keeps
+talking to it in classic ames packets and ignores its mesa ones. libmesa
+speaks just enough classic ames to fix that: when it hears a classic packet
+from a ship whose keys it has, it answers with an `%ahoy` $plea over classic
+ames, which is how Arvo migrates a peer. The ship moves all its flows with
+us to mesa, acks, and resends whatever it had queued for us over mesa.
+(The classic packet format and its AES-256-SIV cipher are implemented in
+C, in `src/eng/eng_ames.c` and `src/aes_siv.c`; nothing else of classic
+ames is.)
 
 ## Identities
 
@@ -206,6 +216,8 @@ pinned sources vere uses, in `ext/`). Only the BLAKE3, ChaCha
   halted flow stays quiet until `%spur`), gall's `/gk` and `/gf`;
 - `store`: both stores' semantics, boot checks, and exactly-once delivery
   into an application table across 12 crash-restarts on a lossy network;
+- `aes_siv`: AES-256-SIV against Hoon's `++sivc`; `engine` also checks
+  an `%ahoy` packet byte for byte (both vectors made with `urbit eval`);
 - `pact`, `lss`, `bitset`, `ship`, `azimuth`, `gall`.
 
 `test/sanitize.sh` builds and runs them under ASan, LeakSanitizer and
@@ -250,6 +262,7 @@ src/
     engine.c    boot, inputs, timers, ping, the public API
     eng_flow.c  flows: pleas, boons, acks, naxplanations, corks, halts
     eng_sys.c   the vanes' own flows (gall /gf /gk, jael), peer points
+    eng_ames.c  classic ames: just enough to move peers to mesa
     eng_fetch.c requests: the .pit, multi-fragment downloads, retries
     eng_serve.c our namespace: pages, LSS proofs, the message cache
     eng_peer.c  peers: keys, routes, sponsorship, comet attestation
@@ -260,6 +273,7 @@ src/
   gall.c        gall request/response encoding
   noun.c        nouns: refcounting, jam/cue/mug/eq (iterative)
   crypto.{c,h}  ames.hoon ++crypt
+  aes_siv.{c,h} AES-256-SIV (classic ames' cipher)
   sha.{c,h}     +shay/+shax/+shal/+shas/+shaf
   ident.c       keyfiles, fake keys, comets
   knot.{c,h}    @ud/@uv/@p knots, paths, +en-beam

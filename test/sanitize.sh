@@ -17,10 +17,10 @@ CC="gcc -std=gnu2x -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer
     -I$U/urcrypt -I$U/blake3 -I$U/ed25519/src -I$Q"
 CORE="vendor/c3/defs.c vendor/murmur3/murmur3.c src/util.c src/ship.c
       src/noun.c src/crypto.c src/sha.c src/ident.c src/json.c src/azimuth.c
-      src/knot.c src/gall.c src/store_mem.c src/store_sqlite.c
+      src/knot.c src/aes_siv.c src/gall.c src/store_mem.c src/store_sqlite.c
       src/wire/bitset.c src/wire/lss.c src/wire/pact.c src/eng/*.c"
 [ -f "$OUT/sqlite3.o" ] || gcc -O1 -c "$Q/sqlite3.c" -o "$OUT/sqlite3.o"
-for t in engine store gall noun ident azimuth crypto; do
+for t in engine store gall noun ident azimuth crypto aes_siv; do
   $CC $CORE test/${t}_test.c "$OUT/sqlite3.o" zig-out/lib/libmesa-urcrypt.a \
       -lpthread -lm -o "$OUT/$t-test"
   echo "== $t"

@@ -194,6 +194,7 @@ pub fn build(b: *std.Build) !void {
         .{ .name = "engine-test", .file = "test/engine_test.c", .defs = &.{} },
         .{ .name = "store-test", .file = "test/store_test.c", .defs = &.{} },
         .{ .name = "gall-test", .file = "test/gall_test.c", .defs = &.{} },
+        .{ .name = "aes-siv-test", .file = "test/aes_siv_test.c", .defs = &.{} },
     };
 
     for (tests) |tst| {
@@ -318,6 +319,7 @@ fn addCore(
             "json.c",
             "azimuth.c",
             "knot.c",
+            "aes_siv.c",
             "store_mem.c",
             "store_sqlite.c",
             "gall.c",
@@ -328,6 +330,7 @@ fn addCore(
             "eng/eng_fetch.c",
             "eng/eng_flow.c",
             "eng/eng_sys.c",
+            "eng/eng_ames.c",
             "eng/engine.c",
             "wire/bitset.c",
             "wire/lss.c",

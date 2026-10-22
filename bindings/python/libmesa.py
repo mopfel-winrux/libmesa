@@ -544,6 +544,7 @@ class Node:
         self.asking = set()
         self.running = False
         self.in_hook = False
+        self.trace = bool(os.environ.get("MESA_TRACE"))
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         if lib.mesa_ship_rank(self.our) == RANK_CZAR and not port:
@@ -703,16 +704,20 @@ class Node:
 
     def _send(self, ctx, lane, buf, n):
         data = C.string_at(buf, n)
-        try:
-            if lane.kind == LANE_GALAXY:
-                addr = self._galaxy(lane.galaxy)
-                if addr:
-                    self.sock.sendto(data, addr)
-            elif lane.kind == LANE_IP and lane.ip and lane.port:
-                ip = "127.0.0.1" if self.fake else socket.inet_ntoa(lane.ip.to_bytes(4, "big"))
-                self.sock.sendto(data, (ip, lane.port))
-        except OSError:
-            pass                     # the engine resends
+        addr = None
+        if lane.kind == LANE_GALAXY:
+            addr = self._galaxy(lane.galaxy)
+        elif lane.kind == LANE_IP and lane.ip and lane.port:
+            ip = "127.0.0.1" if self.fake else socket.inet_ntoa(lane.ip.to_bytes(4, "big"))
+            addr = (ip, lane.port)
+        if self.trace:
+            print("mesa: send %d to %s" % (n, "%s:%d" % addr if addr else "nowhere"),
+                  file=sys.stderr, flush=True)
+        if addr:
+            try:
+                self.sock.sendto(data, addr)
+            except OSError:
+                pass                 # the engine resends
 
     def _galaxy(self, g):
         if self.fake:
@@ -844,6 +849,9 @@ class Node:
                 except BlockingIOError:
                     break
                 lane = Lane(LANE_IP, 0, int.from_bytes(socket.inet_aton(ip), "big"), port)
+                if self.trace:
+                    print("mesa: hear %d from %s:%d" % (len(data), ip, port),
+                          file=sys.stderr, flush=True)
                 lib.mesa_engine_hear(self.eng, lane, data, len(data), self._now())
         for fd in rd:
             if fd is not self.sock:

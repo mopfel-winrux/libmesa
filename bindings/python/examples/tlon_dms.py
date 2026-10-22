@@ -410,6 +410,9 @@ def main():
                     help="first run of an identity that has never run before")
     ap.add_argument("--web", metavar="[ADDR:]PORT", default="127.0.0.1:8474",
                     help="where to serve the page (default 127.0.0.1:8474)")
+    ap.add_argument("--port", type=int, default=0,
+                    help="UDP port for the network (default: any); a fixed one "
+                         "keeps the address other ships know us by across restarts")
     a = ap.parse_args()
 
     if a.k:
@@ -419,7 +422,7 @@ def main():
     else:
         ident = m.Identity.fake(a.F)
 
-    node = DMs(ident, a.s, breached=a.fresh)
+    node = DMs(ident, a.s, breached=a.fresh, port=a.port)
     serve_web(node, a.s, a.web if ":" in a.web else "127.0.0.1:" + a.web)
     print("%s is online; DM it from Tlon" % node.our, flush=True)
     node.run()

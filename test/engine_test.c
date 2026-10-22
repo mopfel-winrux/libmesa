@@ -1069,6 +1069,71 @@ _test_gall_sys(_node* zod, _node* nec)
   _clear(zod); _clear(nec);
 }
 
+/* classic ames: the %ahoy we send (Arvo's +sift-shot and ++sivc decode it
+** to [%$ /mesa-2 %ahoy ~]; checked once with `urbit eval`)
+*/
+static c3_y ahy_y[PACT_SIZE];
+static c3_z ahz_z;
+
+static void
+_h_grab(void* ctx, mesa_lane lane, const uint8_t* buf, size_t len)
+{
+  memcpy(ahy_y, buf, len);
+  ahz_z = len;
+}
+
+static void
+_test_ames(void)
+{
+  static const c3_c* pac_c = "8e52901832b0cdcd8276c5cc2fae0da6cfead9f30014f0d7b07866cf574b975e2b66a9bfbcb600387ad2d58b263f00387ad2619b461300";
+  mesa_ident   moo, mop;
+  mesa_ship    m1, m2;
+  mesa_config  cfg = {0};
+  mesa_engine* eng;
+  mesa_point   pot = {0};
+  c3_y         wan_y[PACT_SIZE];
+  c3_z         wan_z = strlen(pac_c) / 2;
+  eng_peer*    per_u;
+
+  for ( c3_z i = 0; i < wan_z; i++ ) {
+    unsigned v;
+    sscanf(pac_c + 2 * i, "%2x", &v);
+    wan_y[wan_z - 1 - i] = (c3_y)v;
+  }
+
+  mesa_ship_parse("~foprev-satpur-mopfel-winrux", &m1);
+  mesa_ship_parse("~mopfel-winrux", &m2);
+  mesa_ident_fake(m1, &moo);
+  mesa_ident_fake(m2, &mop);
+  cfg.ident    = moo;
+  cfg.store    = mesa_store_memory();
+  cfg.breached = true;
+  cfg.no_ping  = true;
+  cfg.hooks.send = _h_grab;
+  u3_assert( MESA_OK == mesa_engine_open(&cfg, &eng) );
+  pot.who  = m2;
+  pot.rift = 1;
+  pot.life = 6;
+  mesa_ident_pass(&mop, pot.pass);
+  mesa_engine_point(eng, &pot);
+  per_u = eng_peer_get(eng, (u3_ship){ m2.lo, m2.hi });
+
+  eng_txn_open(eng);
+  eng_ames_ahoy(eng, per_u, (mesa_lane){ .kind = MESA_LANE_IP, .ip = 1, .port = 1 });
+  eng_txn_close(eng);
+  expect((ahz_z == wan_z) && !memcmp(ahy_y, wan_y, wan_z), "%%ahoy packet");
+
+  //  our own packet, heard back: not from them to us, so ignored
+  //
+  ahz_z = 0;
+  mesa_engine_hear(eng, (mesa_lane){ .kind = MESA_LANE_IP, .ip = 2, .port = 2 },
+                   wan_y, wan_z, 1000);
+  expect(0 == ahz_z, "our own packet ignored");
+
+  mesa_engine_close(eng);
+  mesa_store_free(cfg.store);
+}
+
 /* garbage datagrams never crash or change anything
 */
 static void
@@ -1096,6 +1161,7 @@ main(int argc, char* argv[])
   _node *zod, *nec;
 
   _test_vectors();
+  _test_ames();
 
   srand(1);
   zod = _add_fake("~zod");

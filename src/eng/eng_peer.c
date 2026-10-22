@@ -34,6 +34,7 @@ eng_peer_new(mesa_engine* eng, u3_ship who_u)
   per_u->gfo_o = c3n;
   per_u->jao_o = c3n;
   per_u->moa_o = c3n;
+  per_u->aho_o = c3n;
   eng_flow_map_init(&per_u->flo_u);
   eng_cork_set_init(&per_u->cor_u);
 
@@ -130,7 +131,8 @@ _unit(c3_o has_o, c3_d val_d)
 
 /* eng_peer_save(): persist
 **
-**   [known [rift life pass] sponsor=(unit) [next-bone gf=(unit) jael=(unit) moon-asked=?]]
+**   [known [rift life pass] sponsor=(unit)
+**    [next-bone gf=(unit) jael=(unit) moon-asked=? ahoy=(unit bone)]]
 */
 void
 eng_peer_save(mesa_engine* eng, eng_peer* per_u)
@@ -162,7 +164,8 @@ eng_peer_save(mesa_engine* eng, eng_peer* per_u)
                     mesa_qual(mesa_atom_u64(per_u->bon_d),
                               _unit(per_u->gfo_o, per_u->gfb_d),
                               _unit(per_u->jao_o, per_u->jab_d),
-                              mesa_atom_u64(c3y == per_u->moa_o))));
+                              mesa_cell(mesa_atom_u64(c3y == per_u->moa_o),
+                                        _unit(per_u->aho_o, per_u->ahb_d)))));
 }
 
 /* eng_peer_ask(): request [per_u]'s point from the host
