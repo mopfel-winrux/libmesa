@@ -4,17 +4,11 @@
 ///
 ///   mesa-ping [identity] [options] ~ship agent [text]
 ///
-/// identity (one of):
-///   -F ~ship        fake ship (to talk to `urbit -F` ships on localhost)
-///   -k keyfile      a planet, star, galaxy or moon keyfile (@uw)
-///   -c              mine a fresh comet (keyfile saved to <state>.key)
+/// identity and state: see cli.h (-F ~ship, -k keyfile, -c, -s db, -b, -p)
 ///
 /// options:
-///   -s state.db     persistent state (SQLite); default: in memory
-///   -b              this identity breached (allow an empty state)
 ///   -w /path        watch /path on the agent and print facts
 ///   -x /path        remote scry /path (e.g. /g/x/1/agent//1/foo)
-///   -p port         UDP port to bind
 ///   -P ~ship        print ~ship's azimuth point and exit
 ///   -l              listen: stay online, ack every poke and print it
 ///                   (try `|hi ~our` from a ship's dojo)
@@ -26,11 +20,12 @@
 #include "mesa/host.h"
 #include "mesa/ident.h"
 
+#include "cli.h"
+
 #include <curl/curl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/random.h>
 #include <uv.h>
 
 static mesa_host* hos;
@@ -47,24 +42,49 @@ _quit(int code)
   mesa_host_stop(hos);
 }
 
+/* _noun(): print a noun: text atoms as 'cords', others as numbers
+*/
+static void
+_noun(mesa_noun som, int dep, int tel)
+{
+  if ( dep > 64 ) { printf("..."); return; }
+  if ( mesa_is_atom(som) ) {
+    size_t   len = mesa_met3(som);
+    uint64_t val;
+    //  one-byte atoms are more likely numbers than text
+    //
+    if ( (len > 1) && (len < 4096) ) {
+      char* str = mesa_atom_get_cord(som);
+      int   txt = (strlen(str) == len);
+      for ( char* c = str; *c && txt; c++ ) {
+        if ( ((unsigned char)*c < 32) && (*c != '\n') ) txt = 0;
+      }
+      if ( txt ) { printf("'%s'", str); free(str); return; }
+      free(str);
+    }
+    if ( mesa_atom_get_u64(som, &val) ) printf("%llu", (unsigned long long)val);
+    else {
+      uint8_t* buf = malloc(len);
+      mesa_atom_get_bytes(som, len, buf);
+      printf("0x");
+      for ( size_t i = len; i--; ) printf("%02x", buf[i]);
+      free(buf);
+    }
+    return;
+  }
+  if ( !tel ) printf("[");
+  _noun(mesa_head(som), dep + 1, 0);
+  printf(" ");
+  _noun(mesa_tail(som), dep + 1, mesa_is_cell(mesa_tail(som)));
+  if ( !tel ) printf("]");
+}
+
 static void
 _print(const char* pre, mesa_noun som)
 {
-  //  cords print as text; anything else as its jam size
-  //
-  if ( mesa_is_atom(som) && mesa_met3(som) < 4096 ) {
-    char* str = mesa_atom_get_cord(som);
-    int   txt = 1;
-    for ( char* c = str; *c; c++ ) if ( (*c < 32) && (*c != '\n') ) txt = 0;
-    if ( txt ) { printf("%s'%s'\n", pre, str); free(str); return; }
-    free(str);
-  }
-  {
-    size_t   len;
-    uint8_t* jam = mesa_jam_bytes(som, &len);
-    printf("%s<noun, %zu bytes jammed>\n", pre, len);
-    free(jam);
-  }
+  printf("%s", pre);
+  _noun(som, 0, 0);
+  printf("\n");
 }
 
 /* _tank(): print a tank on one line (+ram)
@@ -189,88 +209,36 @@ _plea(void* ctx, mesa_ship who, uint64_t bone, mesa_noun vane,
   }
 }
 
-/* comets need a star that's online to sponsor them
-*/
-static int
-_mine(mesa_ident* ide)
-{
-  size_t    siz;
-  uint8_t*  buf = mesa_host_get("https://bootstrap.urbit.org/comet-stars.jam", &siz);
-  mesa_noun lis;
-  mesa_ship sta[4096];
-  size_t    len = 0;
-  uint8_t   eny[64];
-
-  if ( !buf ) {
-    fprintf(stderr, "can't download comet-stars.jam\n");
-    return 0;
-  }
-  lis = mesa_cue_bytes(siz, buf);
-  free(buf);
-  if ( MESA_NONE == lis ) return 0;
-  for ( mesa_noun i = lis; mesa_is_cell(i) && len < 4096; i = mesa_tail(i) ) {
-    uint64_t s;
-    if ( mesa_atom_get_u64(mesa_head(i), &s) ) {
-      sta[len++] = (mesa_ship){ .lo = s, .hi = 0 };
-    }
-  }
-  mesa_unref(lis);
-
-  if ( 64 != getrandom(eny, 64, 0) ) return 0;
-  fprintf(stderr, "mining a comet under %zu stars...\n", len);
-  return mesa_comet_mine(len, sta, eny, UINT64_MAX, ide);
-}
-
 static void
 _usage(void)
 {
-  fprintf(stderr, "usage: mesa-ping (-F ~ship | -k keyfile | -c) [-s db] [-b] "
-                  "[-w /path | -x /path] [-p port] [-l] [~ship agent [text]]\n");
+  fprintf(stderr, "usage: mesa-ping " CLI_USAGE " [-w /path | -x /path] [-l]\n"
+                  "                 [~ship agent [text]]\n");
   exit(2);
 }
 
 int
 main(int argc, char* argv[])
 {
-  mesa_host_config cfg = {0};
-  mesa_ident       ide = {0};
-  const char*      db  = 0;
-  const char*      scr = 0;
-  const char*      age = 0;
-  const char*      txt = "hi";
-  int              hav = 0, pos = 0;
-  int              err;
+  cli         cli_u = {0};
+  const char* scr = 0;
+  const char* age = 0;
+  const char* txt = "hi";
+  int         pos = 0;
+  int         err;
+
+  curl_global_init(CURL_GLOBAL_DEFAULT);
 
   for ( int i = 1; i < argc; i++ ) {
     char* a = argv[i];
-    if      ( !strcmp(a, "-F") && i + 1 < argc ) {
-      mesa_ship who;
-      if ( !mesa_ship_parse(argv[++i], &who) ) _usage();
-      mesa_ident_fake(who, &ide);
-      cfg.fake = true;
-      cfg.engine.breached = true;
-      hav = 1;
-    }
-    else if ( !strcmp(a, "-k") && i + 1 < argc ) {
-      FILE* f = fopen(argv[++i], "r");
-      char  key[8192] = {0};
-      if ( !f || !fread(key, 1, sizeof(key) - 1, f) ) { perror("keyfile"); return 2; }
-      fclose(f);
-      if ( mesa_keyfile_parse(key, &ide, 1) < 1 ) { fprintf(stderr, "bad keyfile\n"); return 2; }
-      hav = 1;
-    }
-    else if ( !strcmp(a, "-c") ) { hav = 2; }
-    else if ( !strcmp(a, "-l") ) { lis_i = 1; }
-    else if ( !strcmp(a, "-s") && i + 1 < argc ) { db = argv[++i]; }
-    else if ( !strcmp(a, "-b") ) { cfg.engine.breached = true; }
+    if      ( cli_option(&cli_u, argc, argv, &i) ) {}
     else if ( !strcmp(a, "-w") && i + 1 < argc ) { wat_c = argv[++i]; }
     else if ( !strcmp(a, "-x") && i + 1 < argc ) { scr = argv[++i]; }
-    else if ( !strcmp(a, "-p") && i + 1 < argc ) { cfg.port = (uint16_t)atoi(argv[++i]); }
+    else if ( !strcmp(a, "-l") ) { lis_i = 1; }
     else if ( !strcmp(a, "-P") && i + 1 < argc ) {
       mesa_ship  who;
       mesa_point pot;
       if ( !mesa_ship_parse(argv[++i], &who) ) _usage();
-      curl_global_init(CURL_GLOBAL_DEFAULT);
       switch ( mesa_azimuth_fetch(0, who, &pot) ) {
         case MESA_AZIMUTH_OK: {
           char* spo = mesa_ship_render(pot.sponsor);
@@ -291,59 +259,18 @@ main(int argc, char* argv[])
     else if ( pos == 1 ) { age = a; pos++; }
     else if ( pos == 2 ) { txt = a; pos++; }
   }
-  if ( !hav || pos < (lis_i ? 0 : scr ? 1 : 2) ) _usage();
+  if ( !cli_u.hav || pos < (lis_i ? 0 : scr ? 1 : 2) ) _usage();
+  if ( !cli_open(&cli_u) ) return 2;
 
-  curl_global_init(CURL_GLOBAL_DEFAULT);
-
-  if ( 2 == hav ) {
-    //  a comet's keys live in its state: reuse them if we have them
-    //
-    char  kef[1024];
-    FILE* f;
-    snprintf(kef, sizeof(kef), "%s.key", db ? db : "comet");
-    if ( (f = fopen(kef, "r")) ) {
-      char key[8192] = {0};
-      size_t n = fread(key, 1, sizeof(key) - 1, f);
-      fclose(f);
-      if ( !n || mesa_keyfile_parse(key, &ide, 1) < 1 ) { fprintf(stderr, "bad %s\n", kef); return 2; }
-    }
-    else {
-      char* str;
-      if ( !_mine(&ide) ) { fprintf(stderr, "mining failed\n"); return 2; }
-      str = mesa_keyfile_render(&ide);
-      if ( (f = fopen(kef, "w")) ) { fprintf(f, "%s\n", str); fclose(f); }
-      free(str);
-    }
-    {
-      char* who = mesa_ship_render(ide.who);
-      fprintf(stderr, "we are %s\n", who);
-      free(who);
-    }
-  }
-
-  if ( db ) {
-    const char* e;
-    if ( !(cfg.engine.store = mesa_store_sqlite(db, &e)) ) {
-      fprintf(stderr, "%s: %s\n", db, e);
-      return 2;
-    }
-  }
-  else {
-    cfg.engine.store = mesa_store_memory();
-    cfg.engine.breached = true;
-  }
-
-  cfg.engine.ident = ide;
-  cfg.engine.hooks = (mesa_hooks){ .done = _done, .boon = _boon, .sage = _sage,
-                                   .plea = _plea };
-
-  if ( MESA_OK != (err = mesa_host_open(&cfg, &hos)) ) {
+  cli_u.cfg.engine.hooks = (mesa_hooks){ .done = _done, .boon = _boon,
+                                         .sage = _sage, .plea = _plea };
+  if ( MESA_OK != (err = mesa_host_open(&cli_u.cfg, &hos)) ) {
     fprintf(stderr, "can't start: %d\n", err);
     return 2;
   }
 
   if ( lis_i && !pos ) {
-    char* who = mesa_ship_render(ide.who);
+    char* who = mesa_ship_render(cli_u.ide.who);
     printf("listening as %s\n", who);
     fflush(stdout);
     free(who);
@@ -375,6 +302,6 @@ main(int argc, char* argv[])
 
   mesa_host_run(hos);
   mesa_host_close(hos);
-  mesa_store_free(cfg.engine.store);
+  mesa_store_free(cli_u.cfg.engine.store);
   return ret_i;
 }

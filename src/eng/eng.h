@@ -145,6 +145,12 @@ struct _eng_peer {
   mesa_lane     lan_u;
   c3_d          con_d;       //  last contact (ms)
   c3_o          liv_o;       //  qos %live
+  //  system flows (eng_sys.c)
+  c3_o          gfo_o;       //  gall /gf flow open
+  c3_d          gfb_d;       //    its bone
+  c3_o          jao_o;       //  jael /public-keys flow open (they're a parent)
+  c3_d          jab_d;       //    its bone
+  c3_o          moa_o;       //  moon: asked our parent for our keys
   //  ossuary
   c3_d          bon_d;       //  next-bone
   eng_flow_map  flo_u;
@@ -339,6 +345,22 @@ void      eng_flow_take(mesa_engine* eng, eng_peer* per_u, eng_req* req_u,
 void      eng_flow_done(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
                         mesa_noun err);
 void      eng_flow_resume(mesa_engine* eng, eng_peer* per_u);
+void      eng_flow_halt(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u);
+void      eng_flow_unhalt(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u);
+
+/* eng_sys.c: system flows (gall /gf /gk, jael /public-keys), points
+*/
+c3_o      eng_sys_bone(eng_peer* per_u, c3_d bon_d);
+void      eng_sys_track(mesa_engine* eng, eng_peer* per_u, mesa_noun msg);
+c3_o      eng_sys_moon(mesa_engine* eng, eng_peer* per_u);
+c3_o      eng_sys_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
+                       mesa_noun van, mesa_noun pax);
+c3_o      eng_sys_boon(mesa_engine* eng, eng_peer* per_u, c3_d bon_d,
+                       mesa_noun pay);
+c3_o      eng_sys_done(mesa_engine* eng, eng_peer* per_u, c3_d bon_d,
+                       mesa_noun err);
+void      eng_sys_breach(mesa_engine* eng, eng_peer* per_u);
+void      eng_point_apply(mesa_engine* eng, const mesa_point* pot);
 
 /* keys for the store
 */

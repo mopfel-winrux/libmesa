@@ -77,8 +77,12 @@ mesa_azimuth_err
 mesa_azimuth_fetch(const char* url, mesa_ship who, mesa_point* out);
 
 /* mesa_host_get(): blocking HTTPS GET (for tools); malloc'd body or 0
+** mesa_host_post(): blocking POST; true on a 2xx answer. Thread-safe;
+**                   run it off the loop (uv_queue_work).
 */
 uint8_t*
 mesa_host_get(const char* url, size_t* len);
+bool
+mesa_host_post(const char* url, const char* type, const void* body, size_t len);
 
 #endif /* ifndef MESA_HOST_H */

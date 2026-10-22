@@ -263,18 +263,22 @@ _ca_file(void)
   return 0;
 }
 
-uint8_t*
-mesa_host_get(const char* url, size_t* len)
+/* _host_http(): blocking GET, or POST if [bod_c]; malloc'd body or 0
+*/
+static uint8_t*
+_host_http(const c3_c* url_c, const c3_c* typ_c, const c3_c* bod_c,
+           size_t bod_z, size_t* len_z)
 {
-  CURL*    cul_u = curl_easy_init();
-  uv_buf_t buf_u = { .base = 0, .len = 0 };
-  CURLcode res_e;
-  long     cod_l = 0;
+  CURL*              cul_u = curl_easy_init();
+  struct curl_slist* hed_u = 0;
+  uv_buf_t           buf_u = { .base = 0, .len = 0 };
+  CURLcode           res_e;
+  long               cod_l = 0;
 
   if ( !cul_u ) {
     return 0;
   }
-  curl_easy_setopt(cul_u, CURLOPT_URL, url);
+  curl_easy_setopt(cul_u, CURLOPT_URL, url_c);
   curl_easy_setopt(cul_u, CURLOPT_WRITEFUNCTION, _curl_write);
   curl_easy_setopt(cul_u, CURLOPT_WRITEDATA, &buf_u);
   curl_easy_setopt(cul_u, CURLOPT_TIMEOUT, 30L);
@@ -283,18 +287,47 @@ mesa_host_get(const char* url, size_t* len)
   if ( _ca_file() ) {
     curl_easy_setopt(cul_u, CURLOPT_CAINFO, _ca_file());
   }
+  if ( bod_c ) {
+    c3_c hed_c[256];
+    snprintf(hed_c, sizeof(hed_c), "Content-Type: %s",
+             typ_c ? typ_c : "application/octet-stream");
+    hed_u = curl_slist_append(hed_u, hed_c);
+    curl_easy_setopt(cul_u, CURLOPT_HTTPHEADER, hed_u);
+    curl_easy_setopt(cul_u, CURLOPT_POSTFIELDS, bod_c);
+    curl_easy_setopt(cul_u, CURLOPT_POSTFIELDSIZE, (long)bod_z);
+  }
 
   res_e = curl_easy_perform(cul_u);
   curl_easy_getinfo(cul_u, CURLINFO_RESPONSE_CODE, &cod_l);
+  curl_slist_free_all(hed_u);
   curl_easy_cleanup(cul_u);
 
-  if ( (CURLE_OK != res_e) || (200 != cod_l) || !buf_u.base ) {
-    mesa_log("mesa: %s: curl error %d, http %ld", url, (c3_i)res_e, cod_l);
+  if ( (CURLE_OK != res_e) || (cod_l < 200) || (cod_l > 299) ) {
+    mesa_log("mesa: %s: curl error %d, http %ld", url_c, (c3_i)res_e, cod_l);
     c3_free(buf_u.base);
     return 0;
   }
-  *len = buf_u.len;
+  if ( !buf_u.base ) {
+    buf_u.base = c3_calloc(1);   //  an empty body is still a success
+  }
+  *len_z = buf_u.len;
   return (uint8_t*)buf_u.base;
+}
+
+uint8_t*
+mesa_host_get(const char* url, size_t* len)
+{
+  return _host_http(url, 0, 0, 0, len);
+}
+
+bool
+mesa_host_post(const char* url, const char* type, const void* body, size_t len)
+{
+  size_t   out_z;
+  uint8_t* out_y = _host_http(url, type, body, len, &out_z);
+
+  c3_free(out_y);
+  return 0 != out_y;
 }
 
 mesa_azimuth_err

@@ -81,7 +81,23 @@ _load_row(void* arg, const uint8_t* key_y, size_t key_z,
       _key_ship(key_y, who_u);
       per_u = eng_peer_make(eng, who_u);
 
-      per_u->bon_d = _u64(mesa_at(15, val));
+      if ( mesa_is_cell(mesa_at(15, val)) ) {
+        //  [next-bone gf=(unit) jael=(unit) moon-asked=?]
+        mesa_noun sys = mesa_at(15, val);
+        per_u->bon_d = _u64(mesa_at(2, sys));
+        if ( mesa_is_cell(mesa_at(6, sys)) ) {
+          per_u->gfo_o = c3y;
+          per_u->gfb_d = _u64(mesa_at(13, sys));
+        }
+        if ( mesa_is_cell(mesa_at(14, sys)) ) {
+          per_u->jao_o = c3y;
+          per_u->jab_d = _u64(mesa_at(29, sys));
+        }
+        per_u->moa_o = _u64(mesa_at(15, sys)) ? c3y : c3n;
+      }
+      else {
+        per_u->bon_d = _u64(mesa_at(15, val));
+      }
       if ( mesa_is_cell(mesa_at(14, val)) ) {
         c3_y spo_y[16];
         mesa_atom_get_bytes(mesa_at(29, val), 16, spo_y);
@@ -649,57 +665,10 @@ mesa_engine_deadline(mesa_engine* eng)
 void
 mesa_engine_point(mesa_engine* eng, const mesa_point* pot)
 {
-  u3_ship   who_u = { pot->who.lo, pot->who.hi };
-  eng_peer* per_u;
-
-  if ( (c3y == u3_ships_equal(who_u, eng->our_u)) || (c3n == eng_txn_open(eng)) ) {
+  if ( c3n == eng_txn_open(eng) ) {
     return;
   }
-
-  per_u = eng_peer_make(eng, who_u);
-  per_u->ask_o = c3n;
-  per_u->ask_d = eng->now_d;
-
-  if ( pot->has_sponsor ) {
-    per_u->spo_u[0] = pot->sponsor.lo;
-    per_u->spo_u[1] = pot->sponsor.hi;
-    per_u->spo_o = c3y;
-  }
-
-  //  no networking keys: nothing to do yet
-  //
-  if ( !pot->life || ('b' != pot->pass[0]) ) {
-    eng_peer_save(eng, per_u);
-    eng_txn_close(eng);
-    return;
-  }
-
-  if ( c3y == per_u->kno_o ) {
-    if ( pot->rift > per_u->rif_d ) {
-      mesa_ship her = { .lo = who_u[0], .hi = who_u[1] };
-
-      eng_peer_breach(eng, per_u);
-      eng_peer_set_keys(eng, per_u, pot->rift, pot->life, pot->pass);
-      eng_peer_save(eng, per_u);
-      if ( eng->hok_u.breach ) {
-        eng->hok_u.breach(eng->hok_u.ctx, her);
-      }
-    }
-    else if ( pot->life != per_u->lyf_d ) {
-      eng_peer_set_keys(eng, per_u, per_u->rif_d, pot->life, pot->pass);
-      eng_peer_save(eng, per_u);
-      eng_req_rebase(eng, per_u);
-      eng_flow_resume(eng, per_u);
-    }
-    else {
-      eng_peer_save(eng, per_u);
-    }
-  }
-  else {
-    eng_peer_set_keys(eng, per_u, pot->rift, pot->life, pot->pass);
-    eng_peer_known(eng, per_u);
-  }
-
+  eng_point_apply(eng, pot);
   eng_txn_close(eng);
 }
 
@@ -840,6 +809,9 @@ _plea(mesa_engine* eng, mesa_ship her, uint64_t bone, mesa_noun msg,
 
   if ( c3y == cor_o ) {
     flo_u->clo_o = c3y;
+  }
+  else {
+    eng_sys_track(eng, per_u, msg);
   }
   eng_flow_pump(eng, per_u, flo_u, msg);
   _contact(eng, per_u);

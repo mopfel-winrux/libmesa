@@ -31,6 +31,9 @@ eng_peer_new(mesa_engine* eng, u3_ship who_u)
   per_u->spo_o = c3n;
   per_u->lan_o = c3n;
   per_u->liv_o = c3n;
+  per_u->gfo_o = c3n;
+  per_u->jao_o = c3n;
+  per_u->moa_o = c3n;
   eng_flow_map_init(&per_u->flo_u);
   eng_cork_set_init(&per_u->cor_u);
 
@@ -117,7 +120,17 @@ eng_peer_free(eng_peer* per_u)
   c3_free(per_u);
 }
 
-/* eng_peer_save(): persist [rift life pass sponsor next-bone known]
+static mesa_noun
+_unit(c3_o has_o, c3_d val_d)
+{
+  return ( c3y == has_o )
+         ? mesa_cell(mesa_atom_u64(0), mesa_atom_u64(val_d))
+         : mesa_atom_u64(0);
+}
+
+/* eng_peer_save(): persist
+**
+**   [known [rift life pass] sponsor=(unit) [next-bone gf=(unit) jael=(unit) moon-asked=?]]
 */
 void
 eng_peer_save(mesa_engine* eng, eng_peer* per_u)
@@ -146,7 +159,10 @@ eng_peer_save(mesa_engine* eng, eng_peer* per_u)
                               mesa_atom_u64(per_u->lyf_d),
                               mesa_atom_bytes(65, pas_y)),
                     spo,
-                    mesa_atom_u64(per_u->bon_d)));
+                    mesa_qual(mesa_atom_u64(per_u->bon_d),
+                              _unit(per_u->gfo_o, per_u->gfb_d),
+                              _unit(per_u->jao_o, per_u->jab_d),
+                              mesa_atom_u64(c3y == per_u->moa_o))));
 }
 
 /* eng_peer_ask(): request [per_u]'s point from the host
@@ -168,6 +184,12 @@ eng_peer_ask(mesa_engine* eng, eng_peer* per_u)
     if ( c3n == per_u->kno_o ) {
       eng_comet_proof(eng, per_u, (mesa_lane){ .kind = MESA_LANE_NONE });
     }
+    return;
+  }
+
+  //  moons' parents speak for them
+  //
+  if ( c3y == eng_sys_moon(eng, per_u) ) {
     return;
   }
 
@@ -392,6 +414,7 @@ eng_peer_breach(mesa_engine* eng, eng_peer* per_u)
     per_u->req_u = nex_u;
   }
 
+  eng_sys_breach(eng, per_u);
   per_u->bon_d = 0;
   per_u->lan_o = c3n;
 }

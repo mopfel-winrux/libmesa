@@ -153,7 +153,7 @@ _test_vectors(void)
 
 /* a simulated network
 */
-#define NODES 4
+#define NODES 5
 
 typedef struct _dgram {
   mesa_lane      fro_u;
@@ -185,6 +185,10 @@ typedef struct _node {
   mesa_ship    ask_u[16];
   c3_w         asn_w;
   c3_o         off_o;    //  down
+  mesa_ship    mon_u;    //  a moon of ours whose keys we give out
+  mesa_ident   mon_i;
+  c3_d         jab_d;    //  the flow we give them on
+  mesa_ship    jah_u;    //    to whom
 } _node;
 
 static _node   nod_u[NODES];
@@ -256,11 +260,56 @@ _record(_node* nod, const c3_c* kin_c, mesa_ship her, c3_d bon_d, mesa_noun som)
   *end_u = rcv_u;
 }
 
+static mesa_noun
+_ship_atom(mesa_ship who)
+{
+  c3_y buf_y[16];
+  for ( c3_w i = 0; i < 8; i++ ) {
+    buf_y[i]     = (c3_y)(who.lo >> (8 * i));
+    buf_y[i + 8] = (c3_y)(who.hi >> (8 * i));
+  }
+  return mesa_atom_bytes(16, buf_y);
+}
+
+/* _moon_full(): jael's [%public-keys-result %full (map ship point)]
+*/
+static mesa_noun
+_moon_full(_node* nod)
+{
+  c3_y      pas_y[65];
+  mesa_noun pon;
+
+  mesa_ident_pass(&nod->mon_i, pas_y);
+  //  [rift life keys=(map life [suite pass]) sponsor=~]
+  pon = mesa_qual(mesa_atom_u64(nod->mon_i.rift),
+                  mesa_atom_u64(nod->mon_i.life),
+                  mesa_trel(mesa_trel(mesa_atom_u64(nod->mon_i.life),
+                                      mesa_atom_u64(1),
+                                      mesa_atom_bytes(65, pas_y)),
+                            mesa_atom_u64(0), mesa_atom_u64(0)),
+                  mesa_atom_u64(0));
+  return mesa_trel(mesa_atom_cord("public-keys-result"),
+                   mesa_atom_cord("full"),
+                   mesa_trel(mesa_cell(_ship_atom(nod->mon_u), pon),
+                             mesa_atom_u64(0), mesa_atom_u64(0)));
+}
+
 static mesa_plea_result
 _h_plea(void* ctx, mesa_ship her, uint64_t bone, mesa_noun vane,
         mesa_noun path, mesa_noun payload, mesa_noun* error)
 {
   _node* nod = ctx;
+  c3_d   van_d = 0;
+
+  //  jael: [%0 %public-keys whos], answered with our moon's point
+  //
+  if ( mesa_atom_get_u64(vane, &van_d) && ('j' == van_d) ) {
+    _record(nod, "jael", her, bone, payload);
+    nod->jab_d = bone;
+    nod->jah_u = her;
+    mesa_flow_boon(nod->eng, her, bone, _moon_full(nod));
+    return MESA_ACK;
+  }
 
   if ( nod->nak_w ) {
     nod->nak_w--;
@@ -299,6 +348,12 @@ _h_corked(void* ctx, mesa_ship her, uint64_t bone)
 }
 
 static void
+_h_breach(void* ctx, mesa_ship her)
+{
+  _record(ctx, "breach", her, 0, MESA_NONE);
+}
+
+static void
 _h_sage(void* ctx, mesa_ship her, const char* path, mesa_noun gage)
 {
   _record(ctx, "sage", her, 0, gage);
@@ -333,7 +388,7 @@ _node_open(_node* nod, c3_o fre_o)
   cfg.hooks    = (mesa_hooks){
     .ctx = nod, .send = _h_send, .need_point = _h_need, .plea = _h_plea,
     .boon = _h_boon, .done = _h_done, .corked = _h_corked, .sage = _h_sage,
-    .peek = _h_peek,
+    .peek = _h_peek, .breach = _h_breach,
   };
   return mesa_engine_open(&cfg, &nod->eng);
 }
@@ -803,6 +858,151 @@ _test_comet(_node* nec)
   _clear(com); _clear(nec);
 }
 
+/* a moon: its keys come from its parent, which keeps them current
+*/
+static void
+_test_moon(_node* zod, _node* nec)
+{
+  mesa_ship  mon = { .lo = (0x7a3bULL << 32) | nec->who.lo, .hi = 0 };
+  mesa_ident ide;
+  _node*     moo;
+  c3_d       bon_d, bak_d;
+  c3_w       ask_w = zod->asn_w;
+
+  mesa_ident_fake(mon, &ide);
+  nec->mon_u = mon;
+  nec->mon_i = ide;
+  moo = _add_node(&ide);
+  expect(MESA_EARL == mesa_ship_rank(mon), "moon rank");
+
+  //  the moon pokes ~zod, who asks ~nec (not azimuth) for its keys
+  //
+  mesa_flow_open(moo->eng, zod->who, &bon_d);
+  _send(moo, zod, bon_d, mesa_atom_cord("from a moon"));
+  _run(5 * 60 * 1000);
+
+  expect(1 == _count(nec, "jael"), "parent asked once: %u", _count(nec, "jael"));
+  expect(zod->asn_w == ask_w, "azimuth not asked about the moon");
+  expect(1 == _count(zod, "plea"), "moon plea: %u", _count(zod, "plea"));
+  expect(1 == _count(moo, "done"), "moon done: %u", _count(moo, "done"));
+  if ( _count(nec, "jael") ) {
+    //  [%0 %public-keys [moon ~ ~]]
+    mesa_noun pay = _nth(nec, "jael", 0)->som;
+    mesa_noun wan = mesa_trel(mesa_atom_u64(0), mesa_atom_cord("public-keys"),
+                              mesa_trel(_ship_atom(mon), mesa_atom_u64(0),
+                                        mesa_atom_u64(0)));
+    expect(mesa_eq(pay, wan), "jael plea shape");
+    mesa_unref(wan);
+  }
+
+  //  and ~zod can poke the moon back
+  //
+  mesa_flow_open(zod->eng, mon, &bak_d);
+  _send(zod, moo, bak_d, mesa_atom_cord("to a moon"));
+  _run(5 * 60 * 1000);
+  expect(1 == _count(moo, "plea"), "zod to moon: %u", _count(moo, "plea"));
+  expect(1 == _count(zod, "done"), "zod done: %u", _count(zod, "done"));
+  _clear(zod); _clear(moo);
+
+  //  the moon cycles its keys; its parent tells ~zod
+  //
+  {
+    mesa_ident nid;
+    c3_y       old_y[65], new_y[65];
+
+    mesa_ident_fake(_ship("~bud"), &nid);   //  any other keys
+    nid.who  = mon;
+    nid.life = 2;
+    mesa_ident_pass(&ide, old_y);
+    mesa_ident_pass(&nid, new_y);
+
+    mesa_flow_boon(nec->eng, nec->jah_u, nec->jab_d,
+      mesa_trel(mesa_atom_cord("public-keys-result"), mesa_atom_cord("diff"),
+        mesa_cell(_ship_atom(mon),
+          mesa_trel(mesa_atom_cord("keys"),
+                    mesa_trel(mesa_atom_u64(1), mesa_atom_u64(1),
+                              mesa_atom_bytes(65, old_y)),
+                    mesa_trel(mesa_atom_u64(2), mesa_atom_u64(1),
+                              mesa_atom_bytes(65, new_y))))));
+    _run(60000);
+
+    mesa_engine_close(moo->eng);
+    moo->ide = nid;
+    nec->mon_i = nid;
+    u3_assert( MESA_OK == _node_open(moo, c3n) );
+
+    _send(zod, moo, bak_d, mesa_atom_cord("new keys"));
+    _run(5 * 60 * 1000);
+    expect(1 == _count(moo, "plea"), "after rekey: %u", _count(moo, "plea"));
+    expect(1 == _count(zod, "done"), "rekey done: %u", _count(zod, "done"));
+    _clear(zod); _clear(moo);
+  }
+
+  //  the moon breaches
+  //
+  mesa_flow_boon(nec->eng, nec->jah_u, nec->jab_d,
+    mesa_trel(mesa_atom_cord("public-keys-result"), mesa_atom_cord("diff"),
+      mesa_cell(_ship_atom(mon),
+        mesa_trel(mesa_atom_cord("rift"), mesa_atom_u64(0), mesa_atom_u64(1)))));
+  _run(60000);
+  expect(1 == _count(zod, "breach"), "breach: %u", _count(zod, "breach"));
+  if ( _count(zod, "breach") ) {
+    expect(mesa_ship_eq(_nth(zod, "breach", 0)->her, mon), "breach who");
+  }
+
+  //  and comes back from fresh state, at its new rift
+  //
+  mesa_engine_close(moo->eng);
+  mesa_store_free(moo->sto);
+  moo->sto = mesa_store_memory();
+  moo->ide.rift = 1;
+  u3_assert( MESA_OK == _node_open(moo, c3y) );
+  mesa_flow_open(moo->eng, zod->who, &bon_d);
+  _send(moo, zod, bon_d, mesa_atom_cord("reborn"));
+  _run(5 * 60 * 1000);
+  expect(1 == _count(zod, "plea"), "after breach: %u", _count(zod, "plea"));
+  expect(1 == _count(moo, "done"), "breach done: %u", _count(moo, "done"));
+  _clear(zod); _clear(nec); _clear(moo);
+}
+
+/* flubs: a peer whose agent isn't running halts our flow, then resumes it
+*/
+static void
+_test_flub(_node* zod, _node* moo)
+{
+  c3_d bon_d, sen_d0;
+  c3_d gfb_d = 4;   //  the moon's first gall flow to ~zod was bone 0
+
+  mesa_flow_open(moo->eng, zod->who, &bon_d);
+  zod->lat_o = c3y;   //  their agent sits on it
+  _send(moo, zod, bon_d, mesa_atom_cord("asleep?"));
+  _run(5000);
+  expect(1 == _count(zod, "plea"), "flub: delivered once");
+
+  //  %flub: stop resending
+  //
+  mesa_flow_boon(zod->eng, moo->who, gfb_d,
+                 mesa_qual(mesa_atom_u64(0), mesa_atom_cord("flub"),
+                           mesa_atom_cord("test"), mesa_atom_u64(bon_d)));
+  _run(5000);
+  sen_d0 = sen_d;
+  _run(30 * 60 * 1000);
+  expect(sen_d - sen_d0 < 3, "halted: %" PRIu64 " datagrams", sen_d - sen_d0);
+  expect(0 == _count(moo, "boon"), "flub boons stay in the engine");
+
+  //  %spur: go on
+  //
+  zod->lat_o = c3n;
+  mesa_flow_done(zod->eng, moo->who, bon_d, MESA_NONE);
+  mesa_flow_boon(zod->eng, moo->who, gfb_d,
+                 mesa_trel(mesa_atom_u64(0), mesa_atom_cord("spur"),
+                           mesa_atom_cord("test")));
+  _run(5 * 60 * 1000);
+  expect(1 == _count(moo, "done"), "resumed: %u dones", _count(moo, "done"));
+  expect(1 == _count(zod, "plea"), "still once: %u", _count(zod, "plea"));
+  _clear(zod); _clear(moo);
+}
+
 /* garbage datagrams never crash or change anything
 */
 static void
@@ -845,6 +1045,8 @@ main(int argc, char* argv[])
   _test_loss(zod, nec);
   _test_restart(zod, nec);
   _test_comet(nec);
+  _test_moon(zod, nec);
+  _test_flub(zod, &nod_u[non_w - 1]);
   _test_garbage(nec);
 
   fprintf(stderr, "engine: %" PRIu64 " datagrams\r\n", sen_d);

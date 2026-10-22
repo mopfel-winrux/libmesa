@@ -133,6 +133,7 @@ pub fn build(b: *std.Build) !void {
             "eng/eng_peer.c",
             "eng/eng_fetch.c",
             "eng/eng_flow.c",
+            "eng/eng_sys.c",
             "eng/engine.c",
             "wire/bitset.c",
             "wire/lss.c",
@@ -185,25 +186,33 @@ pub fn build(b: *std.Build) !void {
                 b.installArtifact(uv.artifact("libuv"));
                 b.installArtifact(curl.artifact("curl"));
 
-                //  mesa-ping: poke a ship from the command line
+                //  mesa-ping: poke a ship from the command line;
+                //  mesa-guestbook: an example application
                 //
-                const tool = b.addExecutable(.{
-                    .name = "mesa-ping",
-                    .root_module = b.createModule(.{
-                        .target = target,
-                        .optimize = optimize,
-                    }),
-                });
-                tool.linkLibC();
-                tool.linkLibrary(host);
-                tool.linkLibrary(uv.artifact("libuv"));
-                tool.linkLibrary(curl.artifact("curl"));
-                tool.linkLibrary(lib);
-                tool.linkLibrary(crypt);
-                tool.linkLibrary(sql);
-                addIncludes(b, tool, urcrypt);
-                tool.addCSourceFiles(.{ .files = &.{"tools/mesa-ping.c"}, .flags = flags.items });
-                b.installArtifact(tool);
+                const tools = [_]struct { name: []const u8, file: []const u8 }{
+                    .{ .name = "mesa-ping", .file = "tools/mesa-ping.c" },
+                    .{ .name = "mesa-guestbook", .file = "examples/guestbook.c" },
+                };
+                for (tools) |tl| {
+                    const tool = b.addExecutable(.{
+                        .name = tl.name,
+                        .root_module = b.createModule(.{
+                            .target = target,
+                            .optimize = optimize,
+                        }),
+                    });
+                    tool.linkLibC();
+                    tool.linkLibrary(host);
+                    tool.linkLibrary(uv.artifact("libuv"));
+                    tool.linkLibrary(curl.artifact("curl"));
+                    tool.linkLibrary(lib);
+                    tool.linkLibrary(crypt);
+                    tool.linkLibrary(sql);
+                    addIncludes(b, tool, urcrypt);
+                    tool.addIncludePath(sqlite.path("."));
+                    tool.addCSourceFiles(.{ .files = &.{ tl.file, "tools/cli.c" }, .flags = flags.items });
+                    b.installArtifact(tool);
+                }
             }
         }
     }

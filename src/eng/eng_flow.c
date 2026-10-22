@@ -534,6 +534,12 @@ _sink_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u, mesa_noun pag)
     return;
   }
 
+  //  vanes' own business (gall's /gf and /gk)
+  //
+  if ( c3y == eng_sys_plea(eng, per_u, flo_u, van, pax) ) {
+    return;
+  }
+
   if ( !eng->hok_u.plea ) {
     eng_flow_done(eng, per_u, flo_u, _default_error());
     return;
@@ -611,7 +617,10 @@ _sink_boon(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u, mesa_noun pag)
     return;
   }
 
-  if ( eng->hok_u.boon && (c3n == _is_ping(eng, per_u, bon_d)) ) {
+  if ( c3y == eng_sys_boon(eng, per_u, bon_d, mesa_tail(pag)) ) {
+    //  ours, not the application's
+  }
+  else if ( eng->hok_u.boon && (c3n == _is_ping(eng, per_u, bon_d)) ) {
     eng->hok_o = c3y;
     eng->hok_u.boon(eng->hok_u.ctx, _her(per_u), bon_d, mesa_tail(pag));
     eng->hok_o = c3n;
@@ -977,6 +986,9 @@ _give_done(mesa_engine* eng, eng_peer* per_u, c3_d bon_d, mesa_noun err)
     eng->pin_d = eng->now_d + ENG_PING_MS;
     return;
   }
+  if ( c3y == eng_sys_done(eng, per_u, bon_d, err) ) {
+    return;
+  }
   if ( eng->hok_u.done ) {
     eng->hok_o = c3y;
     eng->hok_u.done(eng->hok_u.ctx, _her(per_u), bon_d, err);
@@ -1101,6 +1113,53 @@ eng_flow_take(mesa_engine* eng, eng_peer* per_u, eng_req* req_u,
     } break;
 
     default: break;
+  }
+}
+
+/* eng_flow_halt(): +pe-halt; their agent isn't running, so stop
+**                  resending to it until they say otherwise (%spur)
+*/
+void
+eng_flow_halt(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u)
+{
+  eng_req* req_u = per_u->req_u;
+
+  if ( c3y == flo_u->hat_o ) {
+    return;
+  }
+  flo_u->hat_o = c3y;
+  eng_flow_save(eng, per_u, flo_u);
+
+  while ( req_u ) {
+    eng_req* nex_u = req_u->nex_u;
+    if (  (REQ_ACK == req_u->typ_e)
+       && (req_u->bon_d == flo_u->bon_d) && (req_u->dir_e == flo_u->dir_e) )
+    {
+      eng_req_del(per_u, req_u);
+      eng_req_free(req_u);
+    }
+    req_u = nex_u;
+  }
+}
+
+/* eng_flow_unhalt(): +ev-goad-flow; send again
+*/
+void
+eng_flow_unhalt(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u)
+{
+  if ( c3n == flo_u->hat_o ) {
+    return;
+  }
+  flo_u->hat_o = c3n;
+  eng_flow_save(eng, per_u, flo_u);
+
+  if ( flo_u->lod_u && (c3y == per_u->kno_o) ) {
+    if ( 0 == flo_u->win_w ) {
+      _flow_poke(eng, per_u, flo_u);
+    }
+    else {
+      eng_flow_send(eng, per_u, flo_u);
+    }
   }
 }
 
