@@ -2,7 +2,7 @@
 ///
 /// mesa-guestbook: a guestbook any ship can sign, as a libmesa app.
 ///
-///   mesa-guestbook [identity] -s state.db [-H webhook-url] [-W port]
+///   mesa-guestbook [identity] -s state.db [-H webhook-url] [-W [addr:]port]
 ///
 /// identity and state: see tools/cli.h (-F ~ship, -k keyfile, -c, -b, -p)
 ///
@@ -21,8 +21,8 @@
 /// ack commit together, or not at all. With -H, each new entry is also
 /// POSTed as JSON to a webhook, through an outbox table drained after the
 /// commit: at least once, with an id the receiver can deduplicate on.
-/// With -W, it serves a page showing the guestbook at http://127.0.0.1:port/
-/// (and the entries as JSON at /entries.json).
+/// With -W, it serves a page showing the guestbook at http://addr:port/
+/// (and the entries as JSON at /entries.json); addr defaults to 127.0.0.1.
 
 #include "mesa/engine.h"
 #include "mesa/gall.h"
@@ -590,19 +590,28 @@ _web_accept(uv_stream_t* srv, int sas)
 }
 
 static int
-_web_start(int port)
+_web_start(const char* arg)
 {
   struct sockaddr_in add;
+  char               adr[64] = "127.0.0.1";
+  const char*        col = strrchr(arg, ':');
+  int                port;
 
+  if ( col ) {
+    snprintf(adr, sizeof(adr), "%.*s", (int)(col - arg), arg);
+    arg = col + 1;
+  }
+  port = atoi(arg);
   uv_tcp_init(mesa_host_loop(gb_u.hos), &gb_u.web);
-  uv_ip4_addr("127.0.0.1", port, &add);
-  if (  uv_tcp_bind(&gb_u.web, (const struct sockaddr*)&add, 0)
+  if (  (port <= 0) || (port > 65535)
+     || uv_ip4_addr(adr, port, &add)
+     || uv_tcp_bind(&gb_u.web, (const struct sockaddr*)&add, 0)
      || uv_listen((uv_stream_t*)&gb_u.web, 64, _web_accept) )
   {
-    fprintf(stderr, "guestbook: can't serve on 127.0.0.1:%d\n", port);
+    fprintf(stderr, "guestbook: can't serve on %s:%d\n", adr, port);
     return 0;
   }
-  printf("guestbook page: http://127.0.0.1:%d/\n", port);
+  printf("guestbook page: http://%s:%d/\n", adr, port);
   fflush(stdout);
   return 1;
 }
@@ -610,7 +619,7 @@ _web_start(int port)
 static void
 _usage(void)
 {
-  fprintf(stderr, "usage: mesa-guestbook " CLI_USAGE " [-H webhook-url] [-W port]\n");
+  fprintf(stderr, "usage: mesa-guestbook " CLI_USAGE " [-H webhook-url] [-W [addr:]port]\n");
   exit(2);
 }
 
@@ -619,14 +628,14 @@ main(int argc, char* argv[])
 {
   cli cli_u = {0};
   int err;
-  int web = 0;
+  const char* web = 0;
 
   curl_global_init(CURL_GLOBAL_DEFAULT);
 
   for ( int i = 1; i < argc; i++ ) {
     if      ( cli_option(&cli_u, argc, argv, &i) ) {}
     else if ( !strcmp(argv[i], "-H") && i + 1 < argc ) { gb_u.hok = argv[++i]; }
-    else if ( !strcmp(argv[i], "-W") && i + 1 < argc ) { web = atoi(argv[++i]); }
+    else if ( !strcmp(argv[i], "-W") && i + 1 < argc ) { web = argv[++i]; }
     else _usage();
   }
   if ( !cli_u.db ) {
