@@ -90,6 +90,22 @@ guestbook at `http://addr:port/` (default 127.0.0.1).
 inside, for other languages' FFIs. `mesa_malloc()`/`mesa_free()` are its
 allocator.
 
+`bindings/python/libmesa.py` wraps it with ctypes: a `Node` that runs the
+engine on a select loop, with a SQLite store written in Python, and hooks
+for pokes, watches, facts, acks and scries.
+`bindings/python/examples/tlon_dms.py` uses it to DM Tlon users from a
+web page. Your ship (a moon, planet, star or comet) runs there instead of
+in Urbit, and Tlon users message it like anyone else. The page shows one
+conversation per ship, and you can start a new one by ship name. It is
+agent `%chat` speaking Tlon's `%chat-dm-diff-2`, and it answers Tlon's
+version check. Each message is stored in the same transaction as its ack,
+so a crash never loses or repeats one.
+
+```
+python3 bindings/python/examples/tlon_dms.py -k ~sampel-palnet.key -s dms.db --web 127.0.0.1:8474
+python3 bindings/python/examples/tlon_dms.py -c -s dms.db --web 8474   # as a comet
+```
+
 The engine never does I/O: the host feeds it datagrams (`mesa_engine_hear`),
 timer expirations (`mesa_engine_wake`, `mesa_engine_deadline`) and peer
 keys (`mesa_engine_point` in answer to `hooks.need_point`), and it calls
@@ -283,6 +299,7 @@ src/
 include/mesa/   public headers
 tools/          mesa-ping, and the options it shares (cli.c)
 examples/       guestbook.c
+bindings/python/ libmesa.py (ctypes), examples/tlon_dms.py
 test/           unit tests; e2e/ interop test
 vendor/         c3 (from vere/pkg/c3), murmur3, verstable
 ext/            libuv, curl, OpenSSL, nasm build wrappers (from vere)
