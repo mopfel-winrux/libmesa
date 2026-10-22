@@ -15,6 +15,10 @@ remote-scries and is poked by a fake `~zod` running stock vere and Arvo
 (see [Interop test](#interop-test)), with state persisted in SQLite across
 restarts.
 
+It speaks the vanes' own flows for the application: moons' keys come from
+their parents (jael), and a peer whose agent isn't running pauses our flow
+to it (gall's %flub/%spur) instead of being resent to forever.
+
 On the live network, a freshly mined libmesa comet pokes `~zod` directly
 (`%ping` acks; `%hood` nacks with its stack trace) and a planet under a
 star, and is poked back by that planet (`|hi ~comet` from its dojo, routed
@@ -60,6 +64,14 @@ mining a comet under 5 stars...
 we are ~waltus-fonser-bospen-larmex--nommet-donryt-nopful-litzod
 ack
 ```
+
+`examples/guestbook.c` is a small application: any ship can sign the
+guestbook (`:~our/guestbook 'hello!'` from a dojo), subscribe to
+`/entries`, and remote-scry entry *n* at `/g/x/<n>/guestbook//1/entry`.
+It keeps its tables in the engine's own SQLite database, so each
+signature is recorded exactly once, and it POSTs new entries to a webhook
+through an outbox drained after each commit (`-H url`; at least once,
+with an id to deduplicate on).
 
 ### Layers
 
@@ -126,14 +138,31 @@ remember it there; they ignore mesa from it until it breaches.
   `+seed`), as `urbit -k` takes. libmesa-host checks the keys against
   azimuth at startup and learns the sponsor and rift there.
 - **Moons:** the keyfile from the parent's `|moon`. Other ships learn a
-  moon's keys from its parent planet, which must be online. Moons as
-  *peers* need their keys supplied by the application (they're not on
-  azimuth).
+  moon's keys from its parent, which must be online. For moons as peers,
+  the engine asks the parent's jael (`[%j /public-keys ...]`) and stays
+  subscribed, so the moon's rekeys and breaches reach us; azimuth isn't
+  involved.
 - **Comets:** `mesa_comet_mine()` under a list of live stars
   (bootstrap.urbit.org/comet-stars.jam), as `urbit -c` does; save the
   result with `mesa_keyfile_render()`. libmesa serves the comet's
   attestation (`/pawn/proof`) and verifies other comets'.
-- **Fake ships:** `mesa_ident_fake()`, matching `urbit -F`.
+- **Fake ships:** `mesa_ident_fake()`, matching `urbit -F`. Set
+  `mesa_config.fake` (libmesa-host does in fake mode): as in fake Arvo,
+  every ship's keys then come from its name, moons' included.
+
+### Flows the engine handles itself
+
+Arvo's vanes exchange some messages on their own behalf. The engine speaks
+them, and the application never sees them:
+
+- **gall `/gf`:** before our first gall request to a ship, we ask to hear
+  about its agents' flubs. A ship whose agent isn't running drops our
+  plea and sends `%flub`; we stop resending that flow until `%spur`
+  (the agent is back), as Arvo does. Their `/gf` to us is acked.
+- **gall `/gk`:** key requests for `%shut` scry paths are answered
+  `[%0 ~]` (we have none); a bare ack would leave their scry hanging.
+- **jael `/public-keys`:** moons' keys, above.
+- **`/app/ping`:** every 25s to our galaxy, so it can reach us.
 
 ## Build
 
@@ -160,20 +189,28 @@ pinned sources vere uses, in `ext/`). Only the BLAKE3, ChaCha
 - `engine`: engines on a simulated network: pleas, nacks and
   naxplanations, boons, 50KB messages, remote scry, corks, deferred acks,
   30% packet loss, crash-restarts, comets, and 200k garbage datagrams;
+- `engine`: moons (keys from the parent, a rekey, a breach), flubs (a
+  halted flow stays quiet until `%spur`), gall's `/gk` and `/gf`;
 - `store`: both stores' semantics, boot checks, and exactly-once delivery
   into an application table across 12 crash-restarts on a lossy network;
 - `pact`, `lss`, `bitset`, `ship`, `azimuth`, `gall`.
 
-All of them are also clean under ASan, LeakSanitizer and UBSan.
+`test/sanitize.sh` builds and runs them under ASan, LeakSanitizer and
+UBSan (with gcc); they're clean.
+
+`test/guestbook/crash.sh` signs the guestbook 40 times while killing it
+(`kill -9`) every few seconds, with a webhook that fails 30% of the time:
+every signature is acked, recorded once, and delivered to the webhook.
 
 ### Interop test
 
 `test/e2e/` runs libmesa against real Arvo. Boot a fake `~zod` whose base
-desk includes `test/e2e/mesa-test.hoon` (add `%mesa-test` to `desk.bill`):
+desk includes `test/e2e/mesa-test.hoon` and `mesa-echo.hoon` (add both to
+`desk.bill`):
 
 ```
 cp -rL urbit/pkg/arvo arvo
-cp test/e2e/mesa-test.hoon arvo/app/ && echo add %mesa-test to arvo/desk.bill
+cp test/e2e/mesa-*.hoon arvo/app/ && echo add %mesa-test %mesa-echo to arvo/desk.bill
 urbit -F zod -A arvo -B solid.pill -c zod -t -x && urbit -t zod &
 zig build e2e && zig-out/bin/mesa-e2e            # as ~nec
 zig-out/bin/mesa-e2e -s bud.db -i ~bud           # as ~bud, persistent
@@ -181,7 +218,15 @@ zig-out/bin/mesa-e2e -s bud.db -i ~bud           # as ~bud, persistent
 
 It pokes (ack, crash → nack with naxplanation), watches and receives
 facts, sends and receives 6KB multi-fragment messages, gets poked back by
-`~zod`, remote-scries a grown path, leaves and corks.
+`~zod`, remote-scries a grown path, leaves and corks. Then it suspends
+`%mesa-echo` and pokes it: `~zod` flubs and our flow goes quiet; when
+`|revive` brings the agent back, `~zod` sends `%spur` and we resend (but
+see Arvo issue 4 below). Last, a second engine runs as a moon of `~zod`,
+pokes it, and is reached by `~nec` through `~zod`. On a fake network the
+moon has fake keys: fake jael doesn't serve moons' keys over the network
+(it answers with a local gift, not a `%boon`), so keys-from-the-parent is
+covered by the unit tests instead. (`~zod` remembers who it's talked to: run each identity
+once per `~zod`, or keep its state with `-s`.)
 
 ## Layout
 
@@ -190,7 +235,8 @@ src/
   eng/          the engine (a port of the |mesa core of ames.hoon plus
                 the packet layer of vere's mesa.c)
     engine.c    boot, inputs, timers, ping, the public API
-    eng_flow.c  flows: pleas, boons, acks, naxplanations, corks
+    eng_flow.c  flows: pleas, boons, acks, naxplanations, corks, halts
+    eng_sys.c   the vanes' own flows (gall /gf /gk, jael), peer points
     eng_fetch.c requests: the .pit, multi-fragment downloads, retries
     eng_serve.c our namespace: pages, LSS proofs, the message cache
     eng_peer.c  peers: keys, routes, sponsorship, comet attestation
@@ -208,7 +254,8 @@ src/
   ship.{c,h}, util.c, compat.h, arena.h
   wire/         packets (pact.c), LSS (lss.c), bitsets: from vere
 include/mesa/   public headers
-tools/          mesa-ping
+tools/          mesa-ping, and the options it shares (cli.c)
+examples/       guestbook.c
 test/           unit tests; e2e/ interop test
 vendor/         c3 (from vere/pkg/c3), murmur3, verstable
 ext/            libuv, curl, OpenSSL, nasm build wrappers (from vere)
@@ -235,10 +282,11 @@ flow back to vere.
 - Retransmission backs off from 1s to ~m2 per request; vere retries twice
   at 1s and Arvo every ~m2. Timing only; the protocol is unchanged.
 - No forwarding: a libmesa galaxy doesn't relay for its children.
-- Not yet: `%shut` (group-encrypted) scry, `%flub`/`%halt` handling, moon
-  keys from the parent planet, IPv6.
+- We never flub: an application that can't take a plea yet returns
+  `MESA_LATER` instead.
+- Not yet: `%shut` (group-encrypted) scry of our own, IPv6.
 
-### Vere issues found along the way
+### Vere and Arvo issues found along the way
 
 1. `mesa.c` asks Arvo to authenticate a multi-fragment message's first
    page with a `%veri` scry whose path Arvo never answers, and treats the
@@ -248,3 +296,11 @@ flow back to vere.
 2. `pact.c` aborts on a crafted name (above).
 3. `lss_root()` is not the signed root (above); fixing 1 alone would make
    every multi-fragment download fail authentication.
+4. Arvo (as of urbit `50c7f52`): after a flub, the *receiving* flow stays
+   halted when the agent comes back. Gall's `+mo-give-halts` sends the
+   sender `%spur` on `/gf` and gives ames `%spur` for the flow, but ames
+   keeps logging `skip %plea; flow is halted` for every resend, so the
+   plea never lands. Reproduced with `|ames/verb %odd %rcv %msg`, `%idle`
+   and `|revive` against a fake `~zod`; the e2e test reports it as a known
+   issue. Also, gall's `%jolt` task is a no-op (`+mo-jolt` is a stub);
+   agents are revived through clay (`|revive`).

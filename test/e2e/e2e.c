@@ -7,7 +7,11 @@
 ///   mesa-e2e [-s state.db] [-i ~galaxy | -c]
 ///
 /// Runs a script of pokes, a watch, remote scry and a cork, checking each
-/// response, and exits nonzero on failure.
+/// response; then a flub (an agent suspended and revived) and a moon of
+/// ~zod (a second libmesa engine) that ~nec reaches through ~zod. Exits
+/// nonzero on failure.
+///
+/// ~zod's desk needs /app/mesa-test.hoon and /app/mesa-echo.hoon running.
 
 #include "c3/c3.h"
 #include "mesa/engine.h"
@@ -26,10 +30,20 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-static int          sok_i;
-static mesa_engine* eng;
+typedef struct _node {
+  int          sok_i;
+  mesa_engine* eng;
+  mesa_store*  sto;
+  mesa_ident   ide;
+  const char*  nam_c;
+} _node;
+
+static _node        nod_u[2];
+static int          non_i;
+static mesa_engine* eng;     //  ~nec's
 static mesa_ship    zod, nec;
 static int          fail_i;
+static uint64_t     sen_d;   //  datagrams ~nec sent to ~zod
 
 static uint64_t
 _now(void)
@@ -53,6 +67,7 @@ _log(const char* fmt, ...)
 /* events the script waits for
 */
 typedef struct _ev {
+  _node*       nod;
   char         kin_c[16];
   uint64_t     bon_d;
   mesa_noun    som;
@@ -62,11 +77,12 @@ typedef struct _ev {
 static _ev* evs_u;
 
 static void
-_push(const char* kin_c, uint64_t bon_d, mesa_noun som)
+_push(_node* nod, const char* kin_c, uint64_t bon_d, mesa_noun som)
 {
   _ev*  ev  = calloc(1, sizeof(*ev));
   _ev** end = &evs_u;
 
+  ev->nod = nod;
   snprintf(ev->kin_c, sizeof(ev->kin_c), "%s", kin_c);
   ev->bon_d = bon_d;
   ev->som   = ( MESA_NONE == som ) ? MESA_NONE : mesa_ref(som);
@@ -79,60 +95,76 @@ _push(const char* kin_c, uint64_t bon_d, mesa_noun som)
 static void
 _send(void* ctx, mesa_lane lane, const uint8_t* buf, size_t len)
 {
+  _node*             nod = ctx;
   struct sockaddr_in add = { .sin_family = AF_INET };
 
   add.sin_addr.s_addr = htonl(0x7f000001);
   if ( MESA_LANE_GALAXY == lane.kind ) {
     add.sin_port = htons(31337 + lane.galaxy);
+    if ( (nod == &nod_u[0]) && (0 == lane.galaxy) ) sen_d++;
   }
   else {
     add.sin_port = htons(lane.port);
   }
-  sendto(sok_i, buf, len, 0, (struct sockaddr*)&add, sizeof(add));
+  sendto(nod->sok_i, buf, len, 0, (struct sockaddr*)&add, sizeof(add));
 }
 
-static mesa_ship need_u[16];
-static int       nen_i;
+static struct { _node* nod; mesa_ship who; } need_u[16];
+static int nen_i;
 
 static void
 _need(void* ctx, mesa_ship who)
 {
-  if ( nen_i < 16 ) need_u[nen_i++] = who;
+  if ( nen_i < 16 ) {
+    need_u[nen_i].nod = ctx;
+    need_u[nen_i].who = who;
+    nen_i++;
+  }
 }
 
 static mesa_plea_result
 _plea(void* ctx, mesa_ship her, uint64_t bone, mesa_noun vane,
       mesa_noun path, mesa_noun payload, mesa_noun* error)
 {
-  char* van_c = mesa_atom_get_cord(vane);
-  _log("plea from ~%s on bone %lu: vane %%%s", "zod", (unsigned long)bone, van_c);
+  _node* nod   = ctx;
+  char*  van_c = mesa_atom_get_cord(vane);
+  char*  her_c = mesa_ship_render(her);
+  _log("%s: plea from %s on bone %lu: vane %%%s", nod->nam_c, her_c,
+       (unsigned long)bone, van_c);
   free(van_c);
-  _push("plea", bone, payload);
+  free(her_c);
+  _push(nod, "plea", bone, payload);
   return MESA_ACK;
 }
 
 static void
 _boon(void* ctx, mesa_ship her, uint64_t bone, mesa_noun payload)
 {
-  _push("boon", bone, payload);
+  _push(ctx, "boon", bone, payload);
 }
 
 static void
 _done(void* ctx, mesa_ship her, uint64_t bone, mesa_noun error)
 {
-  _push(( MESA_NONE == error ) ? "ack" : "nack", bone, error);
+  _push(ctx, ( MESA_NONE == error ) ? "ack" : "nack", bone, error);
 }
 
 static void
 _corked(void* ctx, mesa_ship her, uint64_t bone)
 {
-  _push("corked", bone, MESA_NONE);
+  _push(ctx, "corked", bone, MESA_NONE);
 }
 
 static void
 _sage(void* ctx, mesa_ship her, const char* path, mesa_noun gage)
 {
-  _push("sage", 0, gage);
+  _push(ctx, "sage", 0, gage);
+}
+
+static void
+_breach(void* ctx, mesa_ship her)
+{
+  _push(ctx, "breach", 0, MESA_NONE);
 }
 
 /* the loop
@@ -141,14 +173,15 @@ static void
 _answer_points(void)
 {
   while ( nen_i ) {
-    mesa_ship  who = need_u[--nen_i];
+    _node*     nod = need_u[--nen_i].nod;
+    mesa_ship  who = need_u[nen_i].who;
     mesa_ident ide;
     mesa_point pot = { .who = who, .rift = 0, .life = 1, .has_sponsor = true };
 
     mesa_ident_fake(who, &ide);
     mesa_ident_pass(&ide, pot.pass);
     pot.sponsor = mesa_ship_sein(who);
-    mesa_engine_point(eng, &pot);
+    mesa_engine_point(nod->eng, &pot);
   }
 }
 
@@ -158,28 +191,41 @@ _spin(uint64_t ms)
   uint64_t end = _now() + ms;
 
   while ( _now() < end ) {
-    struct pollfd pfd = { .fd = sok_i, .events = POLLIN };
-    uint64_t      dea = mesa_engine_deadline(eng);
+    struct pollfd pfd[2];
+    uint64_t      dea = UINT64_MAX;
     uint64_t      now = _now();
-    int           tim = (int)( (dea <= now) ? 0 : ((dea - now) > 50 ? 50 : (dea - now)) );
+    int           tim;
+
+    for ( int i = 0; i < non_i; i++ ) {
+      uint64_t d = mesa_engine_deadline(nod_u[i].eng);
+      if ( d < dea ) dea = d;
+      pfd[i] = (struct pollfd){ .fd = nod_u[i].sok_i, .events = POLLIN };
+    }
+    tim = (int)( (dea <= now) ? 0 : ((dea - now) > 50 ? 50 : (dea - now)) );
 
     _answer_points();
 
-    if ( 0 < poll(&pfd, 1, tim) ) {
-      uint8_t            buf[2048];
-      struct sockaddr_in add;
-      socklen_t          adl = sizeof(add);
-      ssize_t            len = recvfrom(sok_i, buf, sizeof(buf), 0,
-                                        (struct sockaddr*)&add, &adl);
-      if ( len > 0 ) {
-        mesa_lane lan = { .kind = MESA_LANE_IP,
-                          .ip   = ntohl(add.sin_addr.s_addr),
-                          .port = ntohs(add.sin_port) };
-        mesa_engine_hear(eng, lan, buf, (size_t)len, _now());
+    if ( 0 < poll(pfd, (nfds_t)non_i, tim) ) {
+      for ( int i = 0; i < non_i; i++ ) {
+        if ( pfd[i].revents & POLLIN ) {
+          uint8_t            buf[2048];
+          struct sockaddr_in add;
+          socklen_t          adl = sizeof(add);
+          ssize_t            len = recvfrom(nod_u[i].sok_i, buf, sizeof(buf), 0,
+                                            (struct sockaddr*)&add, &adl);
+          if ( len > 0 ) {
+            mesa_lane lan = { .kind = MESA_LANE_IP,
+                              .ip   = ntohl(add.sin_addr.s_addr),
+                              .port = ntohs(add.sin_port) };
+            mesa_engine_hear(nod_u[i].eng, lan, buf, (size_t)len, _now());
+          }
+        }
       }
     }
-    if ( mesa_engine_deadline(eng) <= _now() ) {
-      mesa_engine_wake(eng, _now());
+    for ( int i = 0; i < non_i; i++ ) {
+      if ( mesa_engine_deadline(nod_u[i].eng) <= _now() ) {
+        mesa_engine_wake(nod_u[i].eng, _now());
+      }
     }
   }
 }
@@ -187,13 +233,13 @@ _spin(uint64_t ms)
 /* _wait(): wait up to [ms] for an event of [kin_c]; pop and return it
 */
 static _ev*
-_wait(const char* kin_c, uint64_t ms)
+_wait_on(_node* nod, const char* kin_c, uint64_t ms)
 {
   uint64_t end = _now() + ms;
 
   while ( 1 ) {
     for ( _ev** ev = &evs_u; *ev; ev = &(*ev)->nex_u ) {
-      if ( !strcmp((*ev)->kin_c, kin_c) ) {
+      if ( ((*ev)->nod == nod) && !strcmp((*ev)->kin_c, kin_c) ) {
         _ev* hit = *ev;
         *ev = hit->nex_u;
         return hit;
@@ -202,6 +248,12 @@ _wait(const char* kin_c, uint64_t ms)
     if ( _now() >= end ) return 0;
     _spin(20);
   }
+}
+
+static _ev*
+_wait(const char* kin_c, uint64_t ms)
+{
+  return _wait_on(&nod_u[0], kin_c, ms);
 }
 
 #define check(c, ...) do { if ( !(c) ) { _log("FAIL: " __VA_ARGS__); fail_i = 1; } \
@@ -217,20 +269,59 @@ _ge(const char* agent)
 //  [%0 %m %noun noun]
 //
 static mesa_err
-_poke(uint64_t bone, mesa_noun noun)
+_poke_as(_node* nod, mesa_ship her, const char* agent, uint64_t bone, mesa_noun noun)
 {
-  return mesa_flow_plea(eng, zod, bone, mesa_atom_cord("g"), _ge("mesa-test"),
+  return mesa_flow_plea(nod->eng, her, bone, mesa_atom_cord("g"), _ge(agent),
                         mesa_qual(mesa_atom_u64(0), mesa_atom_cord("m"),
                                   mesa_atom_cord("noun"), noun));
+}
+
+static mesa_err
+_poke(uint64_t bone, mesa_noun noun)
+{
+  return _poke_as(&nod_u[0], zod, "mesa-test", bone, noun);
+}
+
+/* _node_open(): an engine on its own socket (port 0: ephemeral)
+*/
+static int
+_node_open(_node* nod, uint16_t por_s, int fre_i, int pin_i)
+{
+  struct sockaddr_in add = { .sin_family = AF_INET };
+  mesa_config        cfg = {0};
+  mesa_err           err;
+
+  if ( !nod->sok_i ) {
+    nod->sok_i = socket(AF_INET, SOCK_DGRAM, 0);
+    add.sin_addr.s_addr = htonl(0x7f000001);
+    add.sin_port = htons(por_s);
+    if ( bind(nod->sok_i, (struct sockaddr*)&add, sizeof(add)) ) {
+      _log("bind %u: %s", por_s, strerror(errno));
+      return 0;
+    }
+  }
+  cfg.ident    = nod->ide;
+  cfg.store    = nod->sto;
+  cfg.breached = fre_i;
+  cfg.no_ping  = !pin_i;
+  cfg.fake     = true;
+  cfg.now      = _now();
+  cfg.hooks    = (mesa_hooks){ .ctx = nod, .send = _send, .need_point = _need,
+                               .plea = _plea, .boon = _boon, .done = _done,
+                               .corked = _corked, .sage = _sage,
+                               .breach = _breach };
+  if ( MESA_OK != (err = mesa_engine_open(&cfg, &nod->eng)) ) {
+    _log("%s: open: %d", nod->nam_c, err);
+    return 0;
+  }
+  return 1;
 }
 
 int
 main(int argc, char* argv[])
 {
-  struct sockaddr_in add = { .sin_family = AF_INET };
   mesa_config        cfg = {0};
   const char*        db_c = 0;
-  mesa_err           err;
   uint64_t           bon_d, sub_d;
   _ev*               ev;
 
@@ -260,14 +351,6 @@ main(int argc, char* argv[])
     }
   }
 
-  sok_i = socket(AF_INET, SOCK_DGRAM, 0);
-  add.sin_addr.s_addr = htonl(0x7f000001);
-  add.sin_port = htons(com_i ? 0 : (31337 + nec.lo));
-  if ( bind(sok_i, (struct sockaddr*)&add, sizeof(add)) ) {
-    _log("bind %u: %s", 31337 + (unsigned)nec.lo, strerror(errno));
-    return 2;
-  }
-
   if ( !com_i ) {
     mesa_ident_fake(nec, &cfg.ident);
   }
@@ -279,17 +362,15 @@ main(int argc, char* argv[])
   else {
     cfg.store = mesa_store_memory();
   }
-  cfg.breached = true;
-  cfg.no_ping  = true;   //  we are a galaxy anyway
-  cfg.now      = _now();
-  cfg.hooks    = (mesa_hooks){ .send = _send, .need_point = _need, .plea = _plea,
-                               .boon = _boon, .done = _done, .corked = _corked,
-                               .sage = _sage };
-
-  if ( MESA_OK != (err = mesa_engine_open(&cfg, &eng)) ) {
-    _log("open: %d", err);
+  nod_u[0].ide   = cfg.ident;
+  nod_u[0].sto   = cfg.store;
+  nod_u[0].nam_c = "nec";
+  non_i = 1;
+  //  galaxies don't ping
+  if ( !_node_open(&nod_u[0], com_i ? 0 : (uint16_t)(31337 + nec.lo), 1, 0) ) {
     return 2;
   }
+  eng = nod_u[0].eng;
 
   //  1. a poke, acked
   //
@@ -394,9 +475,94 @@ main(int argc, char* argv[])
   ev = _wait("corked", 120000);
   check(ev && ev->bon_d == sub_d, "subscription flow corked");
 
+  //  9. a flub: ~zod's %mesa-echo is suspended, so ~zod drops our poke
+  //     to it and tells us to stop (%flub); revived, it says go (%spur)
+  //
+  {
+    uint64_t ctl_d, ech_d, sen0_d;
+
+    mesa_flow_open(eng, zod, &ctl_d);
+    _poke(ctl_d, mesa_cell(mesa_atom_cord("idle"), mesa_atom_cord("mesa-echo")));
+    ev = _wait("ack", 60000);
+    check(ev && ev->bon_d == ctl_d, "%%mesa-echo suspended");
+
+    mesa_flow_open(eng, zod, &ech_d);
+    _poke_as(&nod_u[0], zod, "mesa-echo", ech_d, mesa_atom_cord("are you there?"));
+    _spin(5000);
+
+    //  unhalted, we'd resend at ~7, 15, 31 and 63s
+    //
+    sen0_d = sen_d;
+    ev = _wait("ack", 60000);
+    check(!ev, "poke to a suspended agent isn't acked");
+    check(sen_d - sen0_d <= 1, "halted: %lu datagrams in 60s",
+          (unsigned long)(sen_d - sen0_d));
+
+    _poke(ctl_d, mesa_cell(mesa_atom_cord("revive"), mesa_atom_cord("base")));
+    ev = _wait("ack", 60000);
+    check(ev && ev->bon_d == ctl_d, "|revive %%base");
+    sen0_d = sen_d;
+
+    //  %spur: we ack it, and resend at once (halted, we'd only ack). (Arvo's receiving flow stays halted after
+    //  its own %spur, as of urbit 50c7f52: its ames logs "skip %plea; flow
+    //  is halted" for every resend. So the poke itself doesn't land; see
+    //  the README.)
+    //
+    _spin(3000);
+    check(sen_d - sen0_d >= 2, "%%spur: resent (%lu datagrams)",
+          (unsigned long)(sen_d - sen0_d));
+    ev = _wait("ack", 20000);
+    if ( ev && ev->bon_d == ech_d ) {
+      _log("ok: the poke went through");
+    }
+    else {
+      _log("known Arvo issue: ~zod's flow is still halted after %%spur");
+    }
+  }
+
+  //  10. a moon of ~zod, as a second libmesa engine. On a fake network
+  //      every ship's keys come from its name (fake jael doesn't serve
+  //      moons' keys over the network); the real protocol, keys from the
+  //      parent, is in the unit tests.
+  //
+  {
+    _node*    moo = &nod_u[1];
+    mesa_ship mon = { .lo = ((_now() & 0xffffff) + 0x100) << 32, .hi = 0 };
+    uint64_t  mob_d, nem_d;
+
+    mesa_ident_fake(mon, &moo->ide);
+    moo->sto   = mesa_store_memory();
+    moo->nam_c = "moon";
+    {
+      char* who_c = mesa_ship_render(mon);
+      _log("moon is %s", who_c);
+      free(who_c);
+    }
+    if ( !_node_open(moo, 0, 1, 1) ) return 2;
+    non_i = 2;
+
+    //  the moon pokes ~zod (and pings it, so ~zod knows where it is)
+    //
+    mesa_flow_open(moo->eng, zod, &mob_d);
+    _poke_as(moo, zod, "mesa-test", mob_d, mesa_atom_cord("from a moon"));
+    ev = _wait_on(moo, "ack", 60000);
+    check(ev && ev->bon_d == mob_d, "a libmesa moon pokes ~zod");
+
+    //  ~nec pokes the moon, through ~zod
+    //
+    mesa_flow_open(eng, mon, &nem_d);
+    _poke_as(&nod_u[0], mon, "anything", nem_d, mesa_atom_cord("hello moon"));
+    ev = _wait_on(moo, "plea", 60000);
+    check(ev != 0, "~nec reaches the moon");
+    ev = _wait("ack", 60000);
+    check(ev && ev->bon_d == nem_d, "the moon acks ~nec");
+  }
+
   _spin(2000);
-  mesa_engine_close(eng);
-  mesa_store_free(cfg.store);
+  for ( int i = 0; i < non_i; i++ ) {
+    mesa_engine_close(nod_u[i].eng);
+    mesa_store_free(nod_u[i].sto);
+  }
   _log(fail_i ? "FAILED" : "all ok");
   return fail_i;
 }

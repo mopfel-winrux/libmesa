@@ -144,7 +144,13 @@ typedef struct mesa_config {
   */
   bool        no_ping;
 
-  uint64_t    now;          //  milliseconds since the epoch
+  /* fake: a fake network (`urbit -F`), where every ship's keys are
+  **       derived from its name: ask hooks.need_point even for moons,
+  **       as fake Arvo does, instead of the moon's parent.
+  */
+  bool        fake;
+
+  uint64_t    now;         //  milliseconds since the epoch
 } mesa_config;
 
 typedef enum mesa_err {
@@ -175,6 +181,11 @@ void     mesa_engine_point_missing(mesa_engine* eng, mesa_ship who);
 /* galaxy routing: galaxies are always reachable at their own lane.
 */
 mesa_ship mesa_engine_ship(mesa_engine* eng);
+
+/* mesa_engine_peer(): the keys, rift and sponsor we have for [her];
+**                     false if we have no keys for them (yet)
+*/
+bool      mesa_engine_peer(mesa_engine* eng, mesa_ship her, mesa_point* out);
 
 /* application transactions
 **

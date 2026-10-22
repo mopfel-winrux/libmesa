@@ -458,6 +458,7 @@ mesa_engine_open(const mesa_config* cfg, mesa_engine** out)
   eng->pin_o = c3n;
   eng->app_o = c3n;
   eng->hok_o = c3n;
+  eng->fak_o = cfg->fake ? c3y : c3n;
   eng->pin_d = cfg->now;
   eng_peer_map_init(&eng->per_u);
 
@@ -541,6 +542,27 @@ mesa_ship
 mesa_engine_ship(mesa_engine* eng)
 {
   return (mesa_ship){ .lo = eng->our_u[0], .hi = eng->our_u[1] };
+}
+
+bool
+mesa_engine_peer(mesa_engine* eng, mesa_ship her, mesa_point* out)
+{
+  u3_ship   who_u = { her.lo, her.hi };
+  eng_peer* per_u = eng_peer_get(eng, who_u);
+
+  if ( !per_u || (c3n == per_u->kno_o) ) {
+    return false;
+  }
+  memset(out, 0, sizeof(*out));
+  out->who  = her;
+  out->rift = per_u->rif_d;
+  out->life = per_u->lyf_d;
+  out->pass[0] = 'b';
+  memcpy(out->pass + 1, per_u->sgn_y, 32);
+  memcpy(out->pass + 33, per_u->cry_y, 32);
+  out->has_sponsor = (c3y == per_u->spo_o);
+  out->sponsor = (mesa_ship){ .lo = per_u->spo_u[0], .hi = per_u->spo_u[1] };
+  return true;
 }
 
 /* inputs

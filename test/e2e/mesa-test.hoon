@@ -3,6 +3,8 @@
 ::    pokes (%noun):
 ::      %crash      crash (the poke is nacked)
 ::      %poke-back  ack, then poke the sender's %libmesa agent back
+::      [%idle dude]    suspend an agent (gall %idle)
+::      [%revive desk]  restart a desk's agents (clay %zest, as |revive)
 ::      anything    ack, and give a fact on /updates
 ::
 ::    watch /updates: an immediate fact, then one per poke
@@ -30,6 +32,12 @@
   ^-  (quip card _this)
   ~&  [%mesa-test-poke src.bowl mark q.vase]
   ?:  =(%crash q.vase)  ~|(%mesa-test-crash !!)
+  ?:  ?=([%idle @] q.vase)
+    :_  this
+    [%pass /idle %arvo %g %idle ;;(dude:gall +.q.vase)]~
+  ?:  ?=([%revive @] q.vase)
+    :_  this
+    [%pass /revive %arvo %c %zest ;;(desk +.q.vase) %live]~
   =.  pokes  +(pokes)
   :_  this
   :-  [%give %fact ~[/updates] [%noun !>([%poked pokes q.vase])]]

@@ -221,6 +221,7 @@ struct mesa_engine {
   c3_y          pas_y[65];
   u3_ship       spo_u;       //  our sponsor
   u3_ship       gal_u;       //  our galaxy
+  c3_o          fak_o;       //  fake network
   //  time
   c3_d          now_d;
   //  state

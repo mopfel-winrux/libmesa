@@ -521,6 +521,7 @@ mesa_host_open(const mesa_host_config* cfg, mesa_host** out)
   }
 
   hos_u->app_u = con_u.hooks;
+  con_u.fake    = con_u.fake || cfg->fake;
   hos_u->fak_o = cfg->fake ? c3y : c3n;
   hos_u->trc_o = getenv("MESA_TRACE") ? c3y : c3n;
   hos_u->azi_c = strdup(cfg->azimuth_url ? cfg->azimuth_url : MESA_AZIMUTH_URL);

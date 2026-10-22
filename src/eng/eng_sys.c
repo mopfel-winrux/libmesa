@@ -374,7 +374,7 @@ eng_sys_moon(mesa_engine* eng, eng_peer* per_u)
   u3_ship   par_u;
   eng_peer* pap_u;
 
-  if ( c3__earl != u3_ship_rank(per_u->who_u) ) {
+  if ( (c3__earl != u3_ship_rank(per_u->who_u)) || (c3y == eng->fak_o) ) {
     return c3n;
   }
   u3_ship_sein(par_u, per_u->who_u);

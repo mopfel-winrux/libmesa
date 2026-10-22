@@ -1003,6 +1003,40 @@ _test_flub(_node* zod, _node* moo)
   _clear(zod); _clear(moo);
 }
 
+/* gall's system flows: /gk gets [%0 ~] then an ack, /gf an ack; the
+** application never sees either
+*/
+static void
+_test_gall_sys(_node* zod, _node* nec)
+{
+  c3_d bon_d, bof_d;
+
+  mesa_flow_open(zod->eng, nec->who, &bon_d);
+  mesa_flow_plea(zod->eng, nec->who, bon_d, mesa_atom_cord("g"),
+                 mesa_cell(mesa_atom_cord("gk"),
+                           mesa_cell(mesa_atom_cord("test"), mesa_atom_u64(0))),
+                 mesa_cell(mesa_atom_u64(0),
+                           mesa_cell(mesa_atom_cord("foo"), mesa_atom_u64(0))));
+  mesa_flow_open(zod->eng, nec->who, &bof_d);
+  mesa_flow_plea(zod->eng, nec->who, bof_d, mesa_atom_cord("g"),
+                 mesa_cell(mesa_atom_cord("gf"), mesa_atom_u64(0)),
+                 mesa_cell(mesa_atom_u64(0), mesa_atom_u64(0)));
+  _run(60000);
+
+  expect(0 == _count(nec, "plea"), "system pleas stay in the engine");
+  expect(1 == _count(zod, "boon"), "/gk boon: %u", _count(zod, "boon"));
+  if ( _count(zod, "boon") ) {
+    mesa_noun wan = mesa_cell(mesa_atom_u64(0), mesa_atom_u64(0));
+    expect(mesa_eq(_nth(zod, "boon", 0)->som, wan), "/gk boon is [%%0 ~]");
+    mesa_unref(wan);
+  }
+  expect(2 == _count(zod, "done"), "system acks: %u", _count(zod, "done"));
+  for ( c3_w i = 0; i < _count(zod, "done"); i++ ) {
+    expect(MESA_NONE == _nth(zod, "done", i)->som, "system ack %u", i);
+  }
+  _clear(zod); _clear(nec);
+}
+
 /* garbage datagrams never crash or change anything
 */
 static void
@@ -1045,6 +1079,7 @@ main(int argc, char* argv[])
   _test_loss(zod, nec);
   _test_restart(zod, nec);
   _test_comet(nec);
+  _test_gall_sys(zod, nec);
   _test_moon(zod, nec);
   _test_flub(zod, &nod_u[non_w - 1]);
   _test_garbage(nec);
