@@ -49,8 +49,23 @@ mesa_engine* eng = mesa_host_engine(hos);
 uint64_t bone;
 mesa_flow_open(eng, her, &bone);
 mesa_gall_poke(eng, her, bone, "my-agent", "noun", mesa_atom_cord("hi"));
+mesa_host_kick(hos);                  //  after engine calls outside a hook
 mesa_host_run(hos);
 ```
+
+## Documentation
+
+- [Getting started](docs/getting-started.md): a first app in C, from
+  identity and store to poking, watching, scrying and being poked.
+- [Talking to Urbit apps](docs/urbit-apps.md): gall over flows, marks,
+  building nouns, what the engine handles itself; Tlon DMs worked through.
+- [Writing a host](docs/host.md): driving the sans-IO engine from your own
+  event loop or language (what a binding has to do).
+- [The store](docs/store.md): the persistence contract, its key layout,
+  and writing your own.
+- [Python](docs/python.md): the ctypes binding and its examples.
+
+The headers in `include/mesa/` are the API reference.
 
 `tools/mesa-ping.c` is a complete example: `mesa-ping -c ~sampel-palnet
 my-agent hello` mines a comet and pokes an agent; `-w /path` watches,
@@ -298,6 +313,7 @@ src/
   wire/         packets (pact.c), LSS (lss.c), bitsets: from vere
 include/mesa/   public headers
 tools/          mesa-ping, and the options it shares (cli.c)
+docs/           guides (see Documentation)
 examples/       guestbook.c
 bindings/python/ libmesa.py (ctypes), examples/tlon_dms.py
 test/           unit tests; e2e/ interop test
