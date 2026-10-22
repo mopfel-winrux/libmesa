@@ -266,8 +266,9 @@ _plea(void* ctx, mesa_ship her, uint64_t bone, mesa_noun vane,
 
     default: break;
   }
-  *error = _error("no-agent", "only %guestbook lives here");
-  return MESA_NACK;
+  //  not ours: no answer (if we ever run that agent, the resend gets it)
+  //
+  return MESA_DROP;
 }
 
 static void

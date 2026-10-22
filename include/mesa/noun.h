@@ -25,6 +25,15 @@ typedef uint64_t mesa_noun;
 */
 #define MESA_NONE ((mesa_noun)UINT64_MAX)
 
+/* memory: strings and buffers libmesa returns (mesa_atom_get_cord(),
+**         mesa_jam_bytes(), mesa_ship_render(), ...) are freed with
+**         mesa_free(); buffers handed to libmesa to free (a store's get())
+**         come from mesa_malloc(). For other languages' FFIs, whose own
+**         allocator may not be libmesa's.
+*/
+void*     mesa_malloc(size_t len);
+void      mesa_free(void* ptr);
+
 /* refcounts
 */
 mesa_noun mesa_ref(mesa_noun som);

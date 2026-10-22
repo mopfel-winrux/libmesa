@@ -179,6 +179,7 @@ typedef struct _node {
   mesa_lane    lan_u;
   _rcv*        rcv_u;
   c3_w         nak_w;    //  nack the next n pleas
+  c3_w         dro_w;    //  drop the next n pleas
   c3_o         bon_o;    //  answer each plea with a boon
   c3_o         lat_o;    //  answer pleas later
   c3_w         drp_w;    //  drop rate, percent
@@ -311,6 +312,13 @@ _h_plea(void* ctx, mesa_ship her, uint64_t bone, mesa_noun vane,
     return MESA_ACK;
   }
 
+  if ( nod->dro_w ) {
+    //  a boon from a dropped plea must be undone too
+    nod->dro_w--;
+    _record(nod, "drop", her, bone, payload);
+    mesa_flow_boon(nod->eng, her, bone, mesa_atom_cord("undone"));
+    return MESA_DROP;
+  }
   if ( nod->nak_w ) {
     nod->nak_w--;
     *error = mesa_cell(mesa_atom_cord("nope"), mesa_atom_u64(0));
@@ -811,6 +819,30 @@ _test_restart(_node* zod, _node* nec)
   _clear(zod); _clear(nec);
 }
 
+/* MESA_DROP: no answer; the resend is handled
+*/
+static void
+_test_drop(_node* zod, _node* nec)
+{
+  c3_d bon_d;
+
+  mesa_flow_open(zod->eng, nec->who, &bon_d);
+  nec->dro_w = 2;
+  nec->bon_o = c3y;
+  _send(zod, nec, bon_d, mesa_atom_cord("not yet"));
+  _run(5 * 60 * 1000);
+  nec->bon_o = c3n;
+
+  expect(2 == _count(nec, "drop"), "dropped twice: %u", _count(nec, "drop"));
+  expect(1 == _count(nec, "plea"), "then taken: %u", _count(nec, "plea"));
+  expect(1 == _count(zod, "done"), "one answer: %u", _count(zod, "done"));
+  if ( _count(zod, "done") ) {
+    expect(MESA_NONE == _nth(zod, "done", 0)->som, "an ack");
+  }
+  expect(1 == _count(zod, "boon"), "dropped boons undone: %u", _count(zod, "boon"));
+  _clear(zod); _clear(nec);
+}
+
 /* MESA_LATER: ack after the handler returns
 */
 static void
@@ -1076,6 +1108,7 @@ main(int argc, char* argv[])
   _test_keen(zod, nec);
   _test_cork(zod, nec);
   _test_later(zod, nec);
+  _test_drop(zod, nec);
   _test_loss(zod, nec);
   _test_restart(zod, nec);
   _test_comet(nec);

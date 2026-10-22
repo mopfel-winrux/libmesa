@@ -62,6 +62,10 @@ typedef enum mesa_plea_result {
   MESA_ACK   = 0,   //  handled; ack it
   MESA_NACK  = 1,   //  refused; its writes are rolled back, *error is sent
   MESA_LATER = 2,   //  will call mesa_flow_done() later
+  MESA_DROP  = 3,   //  not ours: don't answer at all; its writes are rolled
+                    //  back (with a store that has savepoints) and the peer
+                    //  will resend it, e.g. a poke to an agent we don't run
+                    //  (as Arvo drops pleas for agents that aren't running)
 } mesa_plea_result;
 
 typedef struct mesa_hooks {
@@ -80,7 +84,9 @@ typedef struct mesa_hooks {
   **
   **   [vane] is a @tas (e.g. %g), [path] a path (e.g. /ge/my-agent),
   **   [payload] the request. On MESA_NACK, set *error to an error noun
-  **   ([tag=@tas tang]) or leave it MESA_NONE for a default.
+  **   ([tag=@tas tang]) or leave it MESA_NONE for a default. Return
+  **   MESA_DROP for requests that aren't yours (an agent you don't run):
+  **   they get no answer. Without a plea hook, every request is dropped.
   */
   mesa_plea_result (*plea)(void* ctx, mesa_ship her, uint64_t bone,
                            mesa_noun vane, mesa_noun path, mesa_noun payload,

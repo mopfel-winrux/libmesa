@@ -58,6 +58,7 @@ pub fn build(b: *std.Build) !void {
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
+            .pic = true, //  libmesa.so bundles it
         }),
     });
     sql.linkLibC();
@@ -88,59 +89,21 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         }),
     });
+    addCore(b, lib, crypt, sql, sqlite, urcrypt, flags.items);
 
-    lib.linkLibC();
-    lib.linkLibrary(crypt);
-    lib.linkLibrary(sql);
-    lib.addIncludePath(sqlite.path("."));
-
-    //  Debug builds are compiled with UBSan; bundle its runtime so the
-    //  archive links from non-zig toolchains
-    lib.bundle_ubsan_rt = true;
-
-    addIncludes(b, lib, urcrypt);
-
-    lib.addCSourceFiles(.{
-        .root = b.path("vendor"),
-        .files = &.{"c3/defs.c"},
-        .flags = flags.items,
+    //  libmesa.so: the core with urcrypt and sqlite inside, for FFI
+    //  (Python, Go, ...); see bindings/
+    //
+    const so = b.addLibrary(.{
+        .name = "mesa",
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
     });
-
-    lib.addCSourceFiles(.{
-        .root = b.path("vendor/murmur3"),
-        .files = &.{"murmur3.c"},
-        .flags = &.{ "-O3", "-fno-sanitize=all" },
-    });
-
-    lib.addCSourceFiles(.{
-        .root = b.path("src"),
-        .files = &.{
-            "util.c",
-            "ship.c",
-            "noun.c",
-            "crypto.c",
-            "sha.c",
-            "ident.c",
-            "json.c",
-            "azimuth.c",
-            "knot.c",
-            "store_mem.c",
-            "store_sqlite.c",
-            "gall.c",
-            "eng/eng_util.c",
-            "eng/eng_space.c",
-            "eng/eng_serve.c",
-            "eng/eng_peer.c",
-            "eng/eng_fetch.c",
-            "eng/eng_flow.c",
-            "eng/eng_sys.c",
-            "eng/engine.c",
-            "wire/bitset.c",
-            "wire/lss.c",
-            "wire/pact.c",
-        },
-        .flags = flags.items,
-    });
+    addCore(b, so, crypt, sql, sqlite, urcrypt, flags.items);
+    b.installArtifact(so);
 
     lib.installHeadersDirectory(b.path("include/mesa"), "mesa", .{});
 
@@ -309,6 +272,71 @@ fn addIncludes(
     c.addIncludePath(urcrypt.path("ed25519/src"));
 }
 
+//  addCore(): the core library's sources (static or shared)
+//
+fn addCore(
+    b: *std.Build,
+    lib: *std.Build.Step.Compile,
+    crypt: *std.Build.Step.Compile,
+    sql: *std.Build.Step.Compile,
+    sqlite: *std.Build.Dependency,
+    urcrypt: *std.Build.Dependency,
+    flags: []const []const u8,
+) void {
+    lib.linkLibC();
+    lib.linkLibrary(crypt);
+    lib.linkLibrary(sql);
+    lib.addIncludePath(sqlite.path("."));
+
+    //  Debug builds are compiled with UBSan; bundle its runtime so the
+    //  archive links from non-zig toolchains
+    lib.bundle_ubsan_rt = true;
+
+    addIncludes(b, lib, urcrypt);
+
+    lib.addCSourceFiles(.{
+        .root = b.path("vendor"),
+        .files = &.{"c3/defs.c"},
+        .flags = flags,
+    });
+
+    lib.addCSourceFiles(.{
+        .root = b.path("vendor/murmur3"),
+        .files = &.{"murmur3.c"},
+        .flags = &.{ "-O3", "-fno-sanitize=all" },
+    });
+
+    lib.addCSourceFiles(.{
+        .root = b.path("src"),
+        .files = &.{
+            "util.c",
+            "ship.c",
+            "noun.c",
+            "crypto.c",
+            "sha.c",
+            "ident.c",
+            "json.c",
+            "azimuth.c",
+            "knot.c",
+            "store_mem.c",
+            "store_sqlite.c",
+            "gall.c",
+            "eng/eng_util.c",
+            "eng/eng_space.c",
+            "eng/eng_serve.c",
+            "eng/eng_peer.c",
+            "eng/eng_fetch.c",
+            "eng/eng_flow.c",
+            "eng/eng_sys.c",
+            "eng/engine.c",
+            "wire/bitset.c",
+            "wire/lss.c",
+            "wire/pact.c",
+        },
+        .flags = flags,
+    });
+}
+
 fn libcrypt(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -323,6 +351,7 @@ fn libcrypt(
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
+            .pic = true, //  libmesa.so bundles it
         }),
     });
 

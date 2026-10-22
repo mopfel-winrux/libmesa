@@ -540,8 +540,10 @@ _sink_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u, mesa_noun pag)
     return;
   }
 
+  //  no one to take it: don't answer
+  //
   if ( !eng->hok_u.plea ) {
-    eng_flow_done(eng, per_u, flo_u, _default_error());
+    flo_u->pen_o = c3n;
     return;
   }
 
@@ -580,6 +582,22 @@ _sink_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u, mesa_noun pag)
         if ( c3y == sav_o ) sto_u->release(sto_u->ctx);
         if ( MESA_NONE != err ) mesa_unref(err);
         eng_flow_save(eng, per_u, flo_u);
+      } break;
+
+      case MESA_DROP: {
+        //  no answer: undo the handler (with savepoints; without, it
+        //  mustn't have written), and take the resend when it comes
+        //
+        if ( MESA_NONE != err ) mesa_unref(err);
+        if ( c3y == sav_o ) {
+          sto_u->rewind(sto_u->ctx);
+          sto_u->release(sto_u->ctx);
+          eng_out_cut(eng, mar_u);
+          if ( api_d != eng->api_d ) {
+            eng->rel_o = c3y;
+          }
+        }
+        flo_u->pen_o = c3n;
       } break;
 
       default: {

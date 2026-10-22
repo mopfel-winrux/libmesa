@@ -189,7 +189,9 @@ _plea(void* ctx, mesa_ship who, uint64_t bone, mesa_noun vane,
 {
   mesa_gall_request req;
 
-  //  ack gall's own flows; when listening, ack and print pokes too
+  //  ack gall's own flows; when listening, ack and print pokes too.
+  //  Anything else isn't ours (we may be borrowing an identity that an
+  //  app usually runs): no answer, so the sender resends it to the app.
   //
   switch ( mesa_gall_request_parse(vane, path, payload, &req) ) {
     case MESA_GALL_SYSTEM: return MESA_ACK;
@@ -199,13 +201,13 @@ _plea(void* ctx, mesa_ship who, uint64_t bone, mesa_noun vane,
       int   ack = lis_i;
       printf("%s: poke %%%s %%%s ", src, req.agent, mar);
       _print("", req.noun);
-      if ( !ack ) printf("  (refused: not listening)\n");
+      if ( !ack ) printf("  (not listening: left unanswered)\n");
       fflush(stdout);
       free(src);
       free(mar);
-      return ack ? MESA_ACK : MESA_NACK;
+      return ack ? MESA_ACK : MESA_DROP;
     }
-    default: return MESA_NACK;
+    default: return MESA_DROP;
   }
 }
 

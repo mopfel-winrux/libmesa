@@ -83,6 +83,18 @@ _stack_free(_stack* sac_u)
 
 /* refcounts
 */
+void*
+mesa_malloc(size_t len)
+{
+  return c3_malloc(len ? len : 1);
+}
+
+void
+mesa_free(void* ptr)
+{
+  c3_free(ptr);
+}
+
 mesa_noun
 mesa_ref(mesa_noun som)
 {

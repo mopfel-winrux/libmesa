@@ -86,6 +86,10 @@ guestbook at `http://addr:port/` (default 127.0.0.1).
 | `mesa/noun.h` | libmesa | nouns, `jam`/`cue`/`mug` |
 | `mesa/host.h` | libmesa-host | libuv loop, UDP, galaxy DNS, azimuth over HTTPS |
 
+`zig build` also makes `libmesa.so`: the core with its crypto and SQLite
+inside, for other languages' FFIs. `mesa_malloc()`/`mesa_free()` are its
+allocator.
+
 The engine never does I/O: the host feeds it datagrams (`mesa_engine_hear`),
 timer expirations (`mesa_engine_wake`, `mesa_engine_deadline`) and peer
 keys (`mesa_engine_point` in answer to `hooks.need_point`), and it calls
@@ -116,6 +120,14 @@ perform them after the commit.
 
 `mesa_flow_done()` lets a handler return `MESA_LATER` and ack later, from
 its own transaction.
+
+A handler returns `MESA_DROP` for requests that aren't its business, such
+as a poke to an agent it doesn't run: no ack, no nack, its writes rolled
+back. The peer keeps resending (Arvo does the same with pleas for agents
+that aren't running), so if an application that does run that agent
+takes over the identity, the message is delivered then. `mesa-ping` drops
+every poke it isn't listening for, so borrowing an identity from a
+running app never refuses that app's traffic.
 
 ### State and identity
 
@@ -283,8 +295,8 @@ flow back to vere.
 - Retransmission backs off from 1s to ~m2 per request; vere retries twice
   at 1s and Arvo every ~m2. Timing only; the protocol is unchanged.
 - No forwarding: a libmesa galaxy doesn't relay for its children.
-- We never flub: an application that can't take a plea yet returns
-  `MESA_LATER` instead.
+- We never flub: requests for agents we don't run are dropped
+  (`MESA_DROP`) without telling the sender to stop.
 - Not yet: `%shut` (group-encrypted) scry of our own, IPv6.
 
 ### Vere and Arvo issues found along the way
