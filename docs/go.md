@@ -60,8 +60,10 @@ fake ships (`urbit -F`).
 allows an empty store for an identity that has run before: only after a
 breach (see the README's [State and identity](../README.md#state-and-identity)).
 Comets and fake ships never need it. `Trace` (or `$MESA_TRACE`) logs
-every datagram. `Open` binds the socket, checks our keys against
-azimuth for galaxies, stars and planets, and opens the engine.
+every datagram. `Helpers` see requests and responses before the App
+([Helpers](#helpers)). `Open` binds the socket, checks our keys against
+azimuth for galaxies, stars and planets, opens the engine, and starts
+the helpers.
 
 **Run** drives the node until its context is done or `Close` is called.
 `Close` stops it and closes the engine and socket; close the store
@@ -115,7 +117,8 @@ err := n.Do(func() error {
 
 `Do` runs its function in one transaction and returns its error: if it
 fails, its writes and messages are undone. Called before `Run`, it runs
-right away.
+right away (a `Run` starting meanwhile waits for it). `n.After(d, fn)`
+runs `fn` on the loop, in a transaction, once `d` has passed.
 
 | method | |
 | --- | --- |
@@ -130,6 +133,86 @@ right away.
 
 Messages on one flow are delivered in order, one at a time; see
 [urbit-apps.md](urbit-apps.md) for gall's protocol and building nouns.
+
+## Helpers
+
+Helpers carry protocol code that every app would otherwise write into
+its handlers. Pass them in `Config.Helpers`; each sees requests and
+responses before the App, and the first to claim one gets it (the App
+doesn't). A breach goes to every helper, then to the App. They run on
+the loop, inside the event's transaction, like handlers.
+
+Their state lives in the node's `Store` (`n.Store()`) beside the
+engine's, under keys starting with `a` (the engine's are upper case), so
+it commits with each ack and survives restarts, with either store. The
+key format is the Python binding's too: one database works with both. A
+node has at most one `Subs`; `Pokes` are told apart by `Name`.
+
+**Subs** keeps subscriptions alive:
+
+```go
+subs := &mesa.Subs{
+	OnFact:  func(n *mesa.Node, s mesa.Sub, mark string, noun mesa.Noun) { ... },
+	OnWatch: func(n *mesa.Node, s mesa.Sub, err *mesa.Nack) { ... }, // optional
+	OnKick:  func(n *mesa.Node, s mesa.Sub) { ... },                  // optional
+}
+n, _ := mesa.Open(mesa.Config{..., Helpers: []mesa.Helper{subs}})
+n.Do(func() error { return subs.Subscribe(n, her, "my-agent", "/updates") })
+```
+
+- `Subscribe(n, her, agent, path)` watches on a fresh flow, unless that
+  subscription exists already; call it on the loop.
+- Facts on its flows go to `OnFact` with the `Sub` (`Ship`, `Agent`,
+  `Path`), not to `App.Fact`.
+- `OnWatch`: the watch was acked (`err` nil), or nacked: the
+  subscription is over and isn't retried.
+- A kick corks the old flow (as gall does) and resubscribes on a new
+  one: right away the first time, then after 1, 2, 4... seconds, at most
+  `Backoff` (default 5 minutes), until a subscription stays up a minute.
+  The publisher's breach resubscribes the same way. Pending resubscribes
+  are in the store, so they happen after a restart too.
+- `Unsubscribe(n, her, agent, path)` leaves and corks; `List()` is the
+  subscriptions.
+
+**Pokes** sends pokes on one flow per `(ship, agent)`, opened on the
+first and remembered, so they arrive in the order sent:
+
+```go
+pokes := &mesa.Pokes{OnDone: func(n *mesa.Node, her mesa.Ship, agent string, seq uint64, err *mesa.Nack) { ... }}
+seq, err := pokes.Poke(n, her, "my-agent", "noun", "hi") // on the loop
+```
+
+`Poke` numbers pokes from 1 per `(ship, agent)`; `OnDone` reports each
+ack or nack, in order. A breach nacks every unanswered poke with tag
+`breach` and forgets the flow. `Bone(her, agent)` is the flow.
+
+**Tlon DMs**, package `github.com/mopfel-winrux/libmesa/bindings/go/tlon`:
+
+```go
+var dms tlon.DMs
+dms.OnMessage = func(n *mesa.Node, m tlon.Message) error { // m.From, .Text, .ID, .Sent, .Story
+	_, err := dms.Send(n, m.From, "you said: "+m.Text)
+	return err
+}
+dms.OnSent = func(n *mesa.Node, her mesa.Ship, id string, err *mesa.Nack) {} // optional
+n, _ := mesa.Open(mesa.Config{..., Helpers: []mesa.Helper{&dms}})
+```
+
+It runs as agent `%chat`: it answers Tlon's version check with `%chat-dms`
+version 2, gives each new DM to `OnMessage` once (in the transaction that
+acks it; an error nacks it; a resent message with the same author and
+sent time is acked without calling it again), and leaves other agents to
+the App. `Send` (or `SendStory`) DMs on one flow per ship and returns the
+message's id, its sent `@da` in decimal; `OnSent` reports delivery.
+`tlon.Story(text)` and `tlon.StoryText(noun)` convert between text and
+Tlon stories. See [urbit-apps.md](urbit-apps.md#worked-example-tlon-dms)
+for the protocol.
+
+**Writing one**: embed `mesa.BaseHelper` and override `Start` and the
+`Handle*` methods you need (`HandlePoke` and `HandleWatch` return
+`(claimed, err)`, the others `claimed`). Keep state in `n.Store()` under
+keys starting with `a` and a letter no other helper uses; use `n.After`
+for timers.
 
 ## Nouns
 
@@ -175,10 +258,13 @@ your handlers ever nack or drop ([store.md](store.md)).
 
 - `examples/ping`: poke an agent and print the ack or nack (`-c -s
   comet.db ~zod ping hi`), or stay online printing pokes (`-l`).
-- `examples/dmbot`: a Tlon DM bot. DM it from Tlon and it answers;
-  `help` lists what it knows. It sends each reply in the same transaction
-  that acks the message it answers, so a crash never loses a reply or
-  sends one twice.
+- `examples/dmbot`: a Tlon DM bot on package `tlon`. DM it from Tlon and
+  it answers; `help` lists what it knows. It sends each reply in the
+  same transaction that acks the message it answers, so a crash never
+  loses a reply or sends one twice.
+
+The tests (`go test -race ./...`) run fake galaxies 201-218 on
+127.0.0.1.
 
 ## Notes
 

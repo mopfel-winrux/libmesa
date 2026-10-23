@@ -181,9 +181,9 @@ typedef struct mesa_lane {
   `mesa_azimuth_dns_parse()` exist for a host that wants the domain list
   from azimuth: POST the request to the azimuth URL like `getPoint`
   (below); the result is the list of domains, `"urbit.org"` for the live
-  network. `Node._galaxy()` hard-codes `urbit.org` and resolves with a
-  blocking `gethostbyname()` inside `send`, caching for 300s; a new host
-  should resolve off the loop as libmesa-host does.
+  network. `Node._galaxy()` hard-codes `urbit.org`, caches for 300s, and
+  resolves on a thread, off the loop, as libmesa-host does; a datagram
+  meanwhile goes to the last address known, or nowhere.
 - `MESA_LANE_NONE`: never reaches `send` (the engine drops it), but ignore
   unknown kinds anyway.
 
