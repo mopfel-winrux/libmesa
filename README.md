@@ -135,6 +135,11 @@ answers.
 cd bindings/go && go run ./examples/dmbot -c -s bot.db
 ```
 
+Both bindings have helpers for what most apps need: subscriptions that
+resubscribe when kicked, pokes in order on one flow per agent, and
+Tlon's DM protocol (`bindings/python/tlon.py`, Go package `tlon`), with
+their state in the store so it commits with each ack.
+
 The engine never does I/O: the host feeds it datagrams (`mesa_engine_hear`),
 timer expirations (`mesa_engine_wake`, `mesa_engine_deadline`) and peer
 keys (`mesa_engine_point` in answer to `hooks.need_point`), and it calls
@@ -344,8 +349,8 @@ include/mesa/   public headers
 tools/          mesa-ping, and the options it shares (cli.c)
 docs/           guides (see Documentation)
 examples/       guestbook.c
-bindings/python/ libmesa.py (ctypes), examples/tlon_dms.py
-bindings/go/    package mesa (cgo), examples/ping, examples/dmbot
+bindings/python/ libmesa.py (ctypes), tlon.py, examples/tlon_dms.py, tests
+bindings/go/    package mesa (cgo), tlon/, examples/ping, examples/dmbot
 test/           unit tests; e2e/ interop test
 vendor/         c3 (from vere/pkg/c3), murmur3, verstable
 ext/            libuv, curl, OpenSSL, nasm build wrappers (from vere)

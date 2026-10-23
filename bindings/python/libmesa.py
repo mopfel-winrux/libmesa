@@ -23,6 +23,7 @@ tuples for cells, None for ~) and `Noun` handles on the way out.
 
 import ctypes as C
 import fcntl
+import heapq
 import os
 import queue
 import select
@@ -548,15 +549,20 @@ class Node:
     handler, or anywhere else inside `with node.txn():`.
     """
 
-    def __init__(self, identity, db_path, breached=False, port=0, fake=None):
+    def __init__(self, identity, db_path, breached=False, port=0, fake=None, helpers=()):
         self.identity = identity
         self.fake = identity.fake if fake is None else fake
         self.store = SqliteStore(db_path)
         self.db = self.store.db
         self.our = identity.ship
         self.galaxies = {}           # galaxy -> (ip, port, when)
+        self.gal_asking = set()      # galaxies being looked up
         self.points = queue.Queue()  # (ship, Point or None) from resolver threads
+        self.jobs = queue.Queue()    # functions from other threads, to run on the loop
+        self.timers = []             # heap of (when, n, fn), see after()
+        self.timer_n = 0
         self.asking = set()
+        self.helpers = list(helpers)
         self.running = False
         self.in_hook = False
         self.trace = bool(os.environ.get("MESA_TRACE"))
@@ -609,6 +615,8 @@ class Node:
             raise MesaError("this identity has run before, but its state is "
                             "empty: pass breached=True only if it has breached")
         _check(err, "mesa_engine_open")
+        for h in self.helpers:
+            h.start(self)
 
     # ------------------------------------------------- to override
 
@@ -720,6 +728,33 @@ class Node:
         """stop asking for [path_]; on_scry won't be called for it"""
         _check(lib.mesa_yawn(self.eng, her, path_.encode()), "mesa_yawn")
 
+    # ------------------------------------------------- helper state
+
+    def kv_get(self, k):
+        row = self.db.execute("SELECT v FROM mesa_kv WHERE k = ?", (k,)).fetchone()
+        return None if row is None else bytes(row[0])
+
+    def kv_put(self, k, v):
+        self.db.execute("INSERT OR REPLACE INTO mesa_kv VALUES (?, ?)", (k, v))
+
+    def kv_del(self, k):
+        self.db.execute("DELETE FROM mesa_kv WHERE k = ?", (k,))
+
+    def kv_scan(self, pre):
+        """(key, value) rows whose key starts with [pre], in order"""
+        return [(bytes(k), bytes(v)) for k, v in self.db.execute(
+            "SELECT k, v FROM mesa_kv WHERE substr(k, 1, ?) = ? ORDER BY k",
+            (len(pre), pre)).fetchall()]
+
+    def after(self, delay, fn):
+        """run fn() on the loop, in one transaction, [delay] seconds from now"""
+        self.timer_n += 1
+        heapq.heappush(self.timers, (time.time() + delay, self.timer_n, fn))
+
+    def call_soon(self, fn):
+        """run fn() on the loop, in one transaction; safe from any thread"""
+        self.jobs.put(fn)
+
     def txn(self):
         """`with node.txn():` group your writes and sends into one commit"""
         node = self
@@ -777,13 +812,27 @@ class Node:
         hit = self.galaxies.get(g)
         if hit and time.time() - hit[2] < 300:
             return hit[:2]
-        name = ship_text(Ship(g, 0))[1:] + ".urbit.org"
-        try:
-            ip = socket.gethostbyname(name)
-        except OSError:
-            return hit[:2] if hit else None
-        self.galaxies[g] = (ip, 13337 + g, time.time())
-        return (ip, 13337 + g)
+        #  look it up off the loop; meanwhile the datagram goes to the old
+        #  address, or nowhere (the engine resends)
+        if g not in self.gal_asking:
+            self.gal_asking.add(g)
+            name = ship_text(Ship(g, 0))[1:] + ".urbit.org"
+
+            def look():
+                try:
+                    ip = socket.gethostbyname(name)
+                except OSError as e:
+                    ip = None
+                    print("mesa: can't find galaxy %s: %s" % (name, e), file=sys.stderr)
+                self.jobs.put(lambda: self._galaxy_found(g, ip))
+
+            threading.Thread(target=look, daemon=True).start()
+        return hit[:2] if hit else None
+
+    def _galaxy_found(self, g, ip):
+        self.gal_asking.discard(g)
+        if ip:
+            self.galaxies[g] = (ip, 13337 + g, time.time())
 
     def _resolve(self, who):
         """getPoint from azimuth (blocking); a Point or None"""
@@ -824,11 +873,19 @@ class Node:
             kind = lib.mesa_gall_request_parse(vane, path_, payload, C.byref(req))
             agent = req.agent.decode()
             if kind == GALL_POKE:
-                return _answer(self.on_poke(her, agent, Noun(req.mark).text(),
-                                            Noun(req.noun)))
+                mark = Noun(req.mark).text()
+                for h in self.helpers:
+                    res = h.handle_poke(self, her, bone, agent, mark, Noun(req.noun))
+                    if res is not None:
+                        return _answer(res)
+                return _answer(self.on_poke(her, agent, mark, Noun(req.noun)))
             if kind in (GALL_WATCH, GALL_WATCH_AS):
-                return _answer(self.on_watch(her, bone, agent,
-                                             _path_text(Noun(req.path))))
+                p = _path_text(Noun(req.path))
+                for h in self.helpers:
+                    res = h.handle_watch(self, her, bone, agent, p)
+                    if res is not None:
+                        return _answer(res)
+                return _answer(self.on_watch(her, bone, agent, p))
             if kind == GALL_LEAVE:
                 self.on_leave(her, bone, agent)
                 return ACK
@@ -851,19 +908,37 @@ class Node:
         mark, val = noun_t(), noun_t()
         kind = lib.mesa_gall_response(payload, C.byref(mark), C.byref(val))
         if kind == GALL_FACT:
-            self._guard(self.on_fact, her, bone, Noun(mark.value).text(), Noun(val.value))
+            m = Noun(mark.value).text()
+
+            def fact():
+                if not any(h.handle_fact(self, her, bone, m, Noun(val.value))
+                           for h in self.helpers):
+                    self.on_fact(her, bone, m, Noun(val.value))
+            self._guard(fact)
         elif kind == GALL_KICK:
-            self._guard(self.on_kick, her, bone)
+            def kick():
+                if not any(h.handle_kick(self, her, bone) for h in self.helpers):
+                    self.on_kick(her, bone)
+            self._guard(kick)
         else:
             self._guard(self.on_boon, her, bone, Noun(payload))
 
     def _done(self, ctx, her, bone, error):
         her = Ship(her.lo, her.hi)
         err = None if error == NONE else tang(Noun(error))
-        self._guard(self.on_done, her, bone, err)
+
+        def done():
+            if not any(h.handle_done(self, her, bone, err) for h in self.helpers):
+                self.on_done(her, bone, err)
+        self._guard(done)
 
     def _corked(self, ctx, her, bone):
-        self._guard(self.on_corked, Ship(her.lo, her.hi), bone)
+        her = Ship(her.lo, her.hi)
+
+        def corked():
+            if not any(h.handle_corked(self, her, bone) for h in self.helpers):
+                self.on_corked(her, bone)
+        self._guard(corked)
 
     def _sage(self, ctx, her, path_, gage):
         her = Ship(her.lo, her.hi)
@@ -882,7 +957,13 @@ class Node:
         return noun(got)
 
     def _breach(self, ctx, her):
-        self._guard(self.on_breach, Ship(her.lo, her.hi))
+        her = Ship(her.lo, her.hi)
+
+        def breach():
+            for h in self.helpers:
+                h.handle_breach(self, her)
+            self.on_breach(her)
+        self._guard(breach)
 
     # ------------------------------------------------- the loop
 
@@ -894,6 +975,10 @@ class Node:
         """one turn of the loop: datagrams, keys, timers"""
         dea = lib.mesa_engine_deadline(self.eng)
         wait = timeout if dea == NONE else max(0, min(timeout, (dea - self._now()) / 1000))
+        if self.timers:
+            wait = max(0, min(wait, self.timers[0][0] - time.time()))
+        if not self.jobs.empty():
+            wait = 0
         rd, _, _ = select.select([self.sock] + self.extra_fds(), [], [], wait)
         if self.sock in rd:
             for _ in range(256):
@@ -916,9 +1001,21 @@ class Node:
                 lib.mesa_engine_point_missing(self.eng, who)
             else:
                 lib.mesa_engine_point(self.eng, C.byref(pot))
+        while not self.jobs.empty():
+            self._in_txn(self.jobs.get())
+        while self.timers and self.timers[0][0] <= time.time():
+            self._in_txn(heapq.heappop(self.timers)[2])
         if lib.mesa_engine_deadline(self.eng) <= self._now():
             lib.mesa_engine_wake(self.eng, self._now())
         self._outside(self.on_tick)
+
+    def _in_txn(self, fn):
+        """run fn() in a transaction; an exception aborts it and is logged"""
+        try:
+            with self.txn():
+                fn()
+        except Exception:
+            traceback.print_exc()
 
     @staticmethod
     def _outside(fn, *a):
@@ -970,3 +1067,316 @@ def _path_text(p):
         segs.append(p.head.text())
         p = p.tail
     return "/" + "/".join(segs)
+
+# ---------------------------------------------------------------- helpers
+#
+#  A helper sees requests and responses before the Node's on_* methods:
+#  the first to claim one (handle_poke/handle_watch return an answer, the
+#  others True) gets it. Pass them as Node(..., helpers=[...]). Their
+#  state is in mesa_kv under keys starting with 'a' (the engine's are
+#  upper case), in the same format as the Go binding's, so it commits with
+#  each ack, survives restarts, and one database works with both.
+
+class Helper:
+    def start(self, node):
+        """load state; runs once, after the engine opens"""
+
+    def handle_poke(self, node, her, bone, agent, mark, noun_):
+        """None: not ours; otherwise an answer, as on_poke's"""
+        return None
+
+    def handle_watch(self, node, her, bone, agent, path_):
+        return None
+
+    def handle_fact(self, node, her, bone, mark, noun_):
+        return False
+
+    def handle_kick(self, node, her, bone):
+        return False
+
+    def handle_done(self, node, her, bone, error):
+        return False
+
+    def handle_corked(self, node, her, bone):
+        return False
+
+    def handle_breach(self, node, her):
+        """every helper sees a breach, then on_breach"""
+
+def _ship16(s):
+    return s.lo.to_bytes(8, "little") + s.hi.to_bytes(8, "little")
+
+def _ship_of16(b):
+    return Ship(int.from_bytes(b[:8], "little"), int.from_bytes(b[8:16], "little"))
+
+def _u64(v):
+    return v.to_bytes(8, "big")
+
+def _key(kind, *fields):
+    """b'a' kind fields: Ships (16 bytes little-endian), ints (8 bytes
+    big-endian), strs (NUL-terminated)"""
+    k = b"a" + kind
+    for f in fields:
+        if isinstance(f, Ship):
+            k += _ship16(f)
+        elif isinstance(f, int):
+            k += _u64(f)
+        else:
+            k += f.encode() + b"\0"
+    return k
+
+def _cut(b):
+    i = b.index(b"\0")
+    return b[:i].decode(), b[i + 1:]
+
+SUB_WATCHING, SUB_LIVE, SUB_WAITING = 1, 2, 3
+
+class Sub:
+    """a subscription of ours: [path] on [ship]'s [agent]"""
+
+    __slots__ = ("ship", "agent", "path", "bone", "state", "tries", "at")
+
+    def __init__(self, ship_, agent, path_):
+        self.ship, self.agent, self.path = ship_, agent, path_
+        self.bone, self.state, self.tries, self.at = 0, SUB_WAITING, 0, 0
+
+    @property
+    def id(self):
+        return (self.ship, self.agent, self.path)
+
+    def __repr__(self):
+        return "Sub(%s %%%s %s)" % (self.ship, self.agent, self.path)
+
+class Subs(Helper):
+    """Keeps subscriptions alive: subscribe() watches on a fresh flow, a
+    kick (or the publisher's breach) resubscribes after a backoff, and
+    unsubscribe() leaves and corks. Facts on its flows go to on_fact(node,
+    sub, mark, noun), not to Node.on_fact; on_watch(node, sub, error) says
+    a watch was accepted (error None) or refused (the subscription is
+    over); on_kick(node, sub) that one was kicked."""
+
+    def __init__(self, on_fact=None, on_watch=None, on_kick=None, backoff=300):
+        self.on_fact, self.on_watch, self.on_kick = on_fact, on_watch, on_kick
+        self.backoff = backoff           # most seconds between resubscribes
+        self.subs = {}                   # (ship, agent, path) -> Sub
+        self.bones = {}                  # (ship, bone) -> Sub
+        self.gone = set()                # (ship, bone): left or kicked, until corked
+
+    def _skey(self, s):
+        return _key(b"s", s.ship, s.agent, s.path)
+
+    def _save(self, node, s):
+        node.kv_put(self._skey(s), _u64(s.bone) + bytes([s.state, s.tries]) + _u64(s.at))
+
+    def _bury(self, node, her, bone):
+        self.gone.add((her, bone))
+        node.kv_put(_key(b"l", her, bone), b"")
+
+    def start(self, node):
+        for k, v in node.kv_scan(b"as"):
+            if len(k) < 18 or len(v) != 18:
+                continue
+            agent, rest = _cut(k[18:])
+            p, _ = _cut(rest)
+            s = Sub(_ship_of16(k[2:18]), agent, p)
+            s.bone, s.state, s.tries = int.from_bytes(v[:8], "big"), v[8], v[9]
+            s.at = int.from_bytes(v[10:], "big")
+            self.subs[s.id] = s
+            if s.state != SUB_WAITING:
+                self.bones[(s.ship, s.bone)] = s
+        for k, _ in node.kv_scan(b"al"):
+            if len(k) == 26:
+                self.gone.add((_ship_of16(k[2:18]), int.from_bytes(k[18:], "big")))
+        for s in self.subs.values():
+            if s.state == SUB_WAITING:
+                self._schedule(node, s)
+
+    def subscribe(self, node, her, agent, path_):
+        """watch [path_] on [her]'s [agent], unless we already do (in a
+        handler, or `with node.txn():`)"""
+        if (her, agent, path_) in self.subs:
+            return
+        s = Sub(her, agent, path_)
+        self._watch(node, s)
+        self.subs[s.id] = s
+
+    def _watch(self, node, s):
+        bone = node.open_flow(s.ship)
+        node.watch(s.ship, bone, s.agent, s.path)
+        s.bone, s.state = bone, SUB_WATCHING
+        self.bones[(s.ship, bone)] = s
+        self._save(node, s)
+
+    def unsubscribe(self, node, her, agent, path_):
+        """leave [path_] on [her]'s [agent], and close its flow"""
+        s = self.subs.pop((her, agent, path_), None)
+        if s is None:
+            return
+        if s.state != SUB_WAITING:
+            node.leave(her, s.bone, agent)
+            self._cork(node, her, s.bone)
+            self.bones.pop((her, s.bone), None)
+        node.kv_del(self._skey(s))
+
+    def list(self):
+        return sorted(self.subs.values(), key=lambda s: (s.ship.hi, s.ship.lo, s.agent, s.path))
+
+    def _cork(self, node, her, bone):
+        try:
+            node.cork(her, bone)
+        except MesaError:
+            pass                         # closing already
+        self._bury(node, her, bone)
+
+    def _kicked(self, node, s):
+        now = Node._now()
+        if s.state == SUB_LIVE and now - s.at >= 60000:
+            s.tries = 0
+        if s.state != SUB_WAITING:
+            self.bones.pop((s.ship, s.bone), None)
+        delay = 0 if s.tries == 0 else min(2 ** (s.tries - 1), self.backoff)
+        s.at = now + int(delay * 1000)
+        s.tries = min(s.tries + 1, 255)
+        s.state = SUB_WAITING
+        self._save(node, s)
+        self._schedule(node, s)
+
+    def _schedule(self, node, s):
+        def fire():
+            if self.subs.get(s.id) is not s or s.state != SUB_WAITING:
+                return                   # unsubscribed, or resubscribed
+            if Node._now() < s.at:
+                return self._schedule(node, s)
+            self._watch(node, s)
+        node.after(max(0, (s.at - Node._now()) / 1000), fire)
+
+    def handle_fact(self, node, her, bone, mark, noun_):
+        if (her, bone) in self.gone:
+            return True
+        s = self.bones.get((her, bone))
+        if s is None:
+            return False
+        if self.on_fact:
+            self.on_fact(node, s, mark, noun_)
+        return True
+
+    def handle_kick(self, node, her, bone):
+        if (her, bone) in self.gone:
+            return True
+        s = self.bones.get((her, bone))
+        if s is None:
+            return False
+        #  gall closes a kicked subscription's flow; a new one resubscribes
+        self._cork(node, her, bone)
+        if self.on_kick:
+            self.on_kick(node, s)
+        self._kicked(node, s)
+        return True
+
+    def handle_done(self, node, her, bone, error):
+        if (her, bone) in self.gone:
+            return True
+        s = self.bones.get((her, bone))
+        if s is None:
+            return False
+        if s.state != SUB_WATCHING:
+            return True
+        if error is not None:
+            #  refused: over for good
+            del self.bones[(her, bone)]
+            del self.subs[s.id]
+            node.kv_del(self._skey(s))
+            self._cork(node, her, bone)
+        else:
+            s.state, s.at = SUB_LIVE, Node._now()
+            self._save(node, s)
+        if self.on_watch:
+            self.on_watch(node, s, error)
+        return True
+
+    def handle_corked(self, node, her, bone):
+        if (her, bone) not in self.gone:
+            return (her, bone) in self.bones
+        self.gone.discard((her, bone))
+        node.kv_del(_key(b"l", her, bone))
+        return True
+
+    def handle_breach(self, node, her):
+        for g in [g for g in self.gone if g[0] == her]:
+            self.gone.discard(g)
+            node.kv_del(_key(b"l", her, g[1]))
+        for s in [s for (w, _), s in self.bones.items() if w == her]:
+            self._kicked(node, s)
+
+class Pokes(Helper):
+    """Pokes on one flow per (ship, agent), so they arrive in the order
+    sent, remembering the flow across restarts. poke() numbers them from
+    1 per (ship, agent); on_done(node, her, agent, seq, error) says how
+    each went (a breach nacks every unanswered one with ["breach"]). [name]
+    keeps two Pokes on one node apart."""
+
+    def __init__(self, on_done=None, name=""):
+        self.on_done, self.name = on_done, name
+        self.flows = {}                  # (ship, agent) -> [bone, next, acked]
+        self.bones = {}                  # (ship, bone) -> agent
+
+    def _pkey(self, her, agent):
+        return _key(b"p", self.name, her, agent)
+
+    def _save(self, node, her, agent, f):
+        node.kv_put(self._pkey(her, agent), b"".join(_u64(x) for x in f))
+
+    def start(self, node):
+        pre = _key(b"p", self.name)
+        for k, v in node.kv_scan(pre):
+            rest = k[len(pre):]
+            if len(rest) < 17 or len(v) != 24:
+                continue
+            her = _ship_of16(rest)
+            agent, _ = _cut(rest[16:])
+            f = [int.from_bytes(v[i:i + 8], "big") for i in (0, 8, 16)]
+            self.flows[(her, agent)] = f
+            self.bones[(her, f[0])] = agent
+
+    def poke(self, node, her, agent, mark, value):
+        """poke [her]'s [agent]; its seq (in a handler, or `with node.txn():`)"""
+        f = self.flows.get((her, agent))
+        if f is None:
+            f = [node.open_flow(her), 1, 0]
+        node.poke(her, f[0], agent, mark, value)
+        seq = f[1]
+        f[1] += 1
+        self._save(node, her, agent, f)
+        self.flows[(her, agent)] = f
+        self.bones[(her, f[0])] = agent
+        return seq
+
+    def bone(self, her, agent):
+        """the flow we poke [her]'s [agent] on, or None"""
+        f = self.flows.get((her, agent))
+        return f[0] if f else None
+
+    def handle_done(self, node, her, bone, error):
+        agent = self.bones.get((her, bone))
+        if agent is None:
+            return False
+        f = self.flows[(her, agent)]
+        f[2] += 1
+        self._save(node, her, agent, f)
+        if self.on_done:
+            self.on_done(node, her, agent, f[2], error)
+        return True
+
+    def handle_corked(self, node, her, bone):
+        return (her, bone) in self.bones
+
+    def handle_breach(self, node, her):
+        for (w, agent), f in list(self.flows.items()):
+            if w != her:
+                continue
+            node.kv_del(self._pkey(her, agent))
+            del self.flows[(w, agent)]
+            self.bones.pop((w, f[0]), None)
+            for seq in range(f[2] + 1, f[1]):
+                if self.on_done:
+                    self.on_done(node, her, agent, seq, ["breach"])

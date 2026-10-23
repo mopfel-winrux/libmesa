@@ -107,7 +107,7 @@ thread; see [Threads](#threads).
 ## Node
 
 ```python
-Node(identity, db_path, breached=False, port=0, fake=None)
+Node(identity, db_path, breached=False, port=0, fake=None, helpers=())
 ```
 
 - `identity`: an `Identity`.
@@ -122,6 +122,8 @@ Node(identity, db_path, breached=False, port=0, fake=None)
   other ships know us by across restarts. Galaxies default to 13337+n
   (31337+n when fake).
 - `fake`: a fake network (`urbit -F`); defaults to `identity.fake`.
+- `helpers`: `Helper`s that see requests and responses before your
+  handlers ([Helpers](#helpers)).
 
 The constructor, in order:
 
@@ -135,7 +137,8 @@ The constructor, in order:
 4. opens the engine (`mesa_engine_open`). Other errors raise
    `MesaError("mesa_engine_open: error N")`, with `N` a `mesa_err` from
    `mesa/engine.h` (-3 is a database that belongs to another ship, life
-   or rift).
+   or rift);
+5. starts each helper (`helper.start(node)`), which loads its state.
 
 Attributes: `node.our` (our `Ship`), `node.db`, `node.store`, `node.eng`
 (the `mesa_engine*`), `node.sock`.
@@ -154,8 +157,11 @@ and the socket, and releases the lock.
 3. calls `self.on_fd(fd)` for each extra fd that is readable;
 4. hands the engine any keys the resolver threads found
    (`mesa_engine_point`, or `mesa_engine_point_missing`);
-5. runs due timers (`mesa_engine_wake`);
-6. calls `self.on_tick()`.
+5. runs functions posted with `call_soon()` (galaxy lookups post theirs
+   here) and timers set with `after()` that are due, each in its own
+   transaction;
+6. runs the engine's due timers (`mesa_engine_wake`);
+7. calls `self.on_tick()`.
 
 So `on_tick` runs at least every 100 ms. An exception from `on_tick` or
 `on_fd` is printed and the loop goes on. Exceptions in the other
@@ -279,9 +285,11 @@ which the node can't resolve on the live network
 ([host.md](host.md#moons)).
 
 A datagram for a galaxy goes to `<galaxy>.urbit.org` port 13337+n,
-looked up with `socket.gethostbyname` and cached for five minutes (the
-last answer is kept if a lookup fails). The lookup blocks the loop. On a
-fake network galaxies are `127.0.0.1:31337+n`, and every datagram goes
+looked up with `socket.gethostbyname` and cached for five minutes. The
+lookup runs on a daemon thread, one per galaxy at a time, and posts its
+answer back to the loop, which never waits for it: until it's in, a
+datagram for that galaxy goes to the last address known (a failed lookup
+keeps it), or nowhere, and the engine resends. On a fake network galaxies are `127.0.0.1:31337+n`, and every datagram goes
 to 127.0.0.1 whatever address it names.
 
 Set `MESA_TRACE` to any non-empty value to print one line to stderr per
@@ -337,12 +345,14 @@ returning; don't keep `Noun`s in `self`.
 
 The engine is single-threaded, and so is the node: its loop, every
 handler, and `node.db` belong to the thread that calls `run()`. The only
-other threads are the azimuth resolvers, which talk to the loop through
-a `queue.Queue`.
+other threads are the azimuth and galaxy-DNS lookups, which talk to the
+loop through queues.
 
 To do something from another thread (a web server, a REPL), don't call
-`poke()` or write `node.db` there. Put the work on a queue and drain it
-in `on_tick`, inside a transaction:
+`poke()` or write `node.db` there. Hand the loop a function with
+`node.call_soon(fn)`: it runs on the loop's next turn, in a transaction.
+Or put the work on your own queue and drain it in `on_tick`, inside a
+transaction:
 
 ```python
 def setup(self):
@@ -359,6 +369,122 @@ def on_tick(self):
 `on_tick` runs at least every 100 ms, so the latency is that. For a
 lower one, add a pipe or socketpair to `extra_fds()`, write a byte to it
 from the other thread, and drain the queue in `on_fd`.
+
+## Helpers
+
+Helpers carry the protocol code that every app would otherwise write in
+its handlers: keeping subscriptions alive, ordering pokes, Tlon's DM
+protocol. Pass them to the node, `Node(..., helpers=[subs, pokes])`;
+each sees requests and responses before your `on_*` methods, and the
+first to claim one gets it (yours don't). A breach goes to every helper,
+then to `on_breach`. Like handlers, they run on the loop inside the
+event's transaction.
+
+Their state lives in `mesa_kv` beside the engine's, under keys starting
+with `a` (the engine's are upper case), so it commits with each ack and
+survives restarts. The key format is the Go binding's too: one database
+works with either. A node has at most one `Subs`; `Pokes` are told
+apart by `name`.
+
+### Subs
+
+```python
+subs = m.Subs(on_fact=lambda node, sub, mark, noun: print(sub.path, noun.py()),
+              on_watch=lambda node, sub, error: print(sub, "refused" if error else "ok"),
+              on_kick=None, backoff=300)
+node = m.Node(ident, "sub.db", helpers=[subs])
+with node.txn():
+    subs.subscribe(node, m.ship("~sampel-palnet"), "my-agent", "/updates")
+node.run()
+```
+
+- `subscribe(node, her, agent, path)` watches on a fresh flow, unless
+  that subscription exists already. Call it in a handler or `with
+  node.txn():`.
+- Facts on its flows go to `on_fact(node, sub, mark, noun)`; a `Sub` has
+  `ship`, `agent`, `path`.
+- `on_watch(node, sub, error)`: the watch was acked (`error` None), or
+  nacked: the subscription is over and isn't retried.
+- A kick corks the old flow (as gall does) and resubscribes on a new
+  one: right away the first time, then after 1, 2, 4... seconds, at most
+  `backoff`, until a subscription stays up a minute. `on_kick(node, sub)`
+  is told. The publisher's breach resubscribes the same way.
+- `unsubscribe(node, her, agent, path)` leaves and corks. `list()` is the
+  subscriptions.
+
+Backoff timers are kept in the database, so a resubscribe due when the
+node stopped happens when it starts again.
+
+### Pokes
+
+```python
+pokes = m.Pokes(on_done=lambda node, her, agent, seq, error: ..., name="")
+with node.txn():
+    seq = pokes.poke(node, her, "my-agent", "noun", "hi")
+```
+
+One flow per `(ship, agent)`, opened on the first poke and remembered,
+so pokes arrive in the order sent. `poke()` returns a sequence number,
+from 1 per `(ship, agent)`; `on_done(node, her, agent, seq, error)`
+reports each ack (`error` None) or nack (its lines), in order. A breach
+nacks every unanswered poke with `["breach"]` and forgets the flow.
+`bone(her, agent)` is the flow, if any.
+
+### Writing one
+
+Subclass `m.Helper` and override what you need: `start(node)`;
+`handle_poke(node, her, bone, agent, mark, noun)` and `handle_watch(node,
+her, bone, agent, path)` return `None` (not ours) or an answer, as
+`on_poke`'s; `handle_fact`, `handle_kick`, `handle_done`,
+`handle_corked` return True to claim; `handle_breach`. For state,
+`node.kv_get(k)`, `kv_put(k, v)`, `kv_del(k)` and `kv_scan(prefix)`
+work on `mesa_kv` in the current transaction (pick keys starting with
+`a` and a letter no other helper uses); `node.after(seconds, fn)` runs
+`fn()` later on the loop, in a transaction.
+
+## Tlon DMs: tlon.py
+
+`bindings/python/tlon.py` is a helper for Tlon's DM protocol
+(tloncorp/tlon-apps, desk/app/chat.hoon):
+
+```python
+import libmesa as m, tlon
+
+def message(node, msg):                   # msg.ship, .text, .id, .sent, .story
+    dms.send(node, msg.ship, "you said: " + msg.text)
+
+dms = tlon.DMs(on_message=message,
+               on_sent=lambda node, her, id_, error: None)
+node = m.Node(m.Identity.comet("bot.key"), "bot.db", helpers=[dms])
+node.run()
+```
+
+- It runs as agent `%chat`: it answers Tlon's version check (a watch on
+  `/~/negotiate/version/chat-dms`) with a `noun` fact of `2`, acks
+  `%chat` pokes that aren't DM diffs and DM deltas other than `%add`
+  (deletes, reactions, replies), and leaves other agents to you.
+- `on_message(node, msg)` gets each new message once, in the transaction
+  that acks it; raise to nack it (its writes are undone). Tlon resends a
+  message on a new flow sometimes; one with the same author and `sent`
+  time is acked without calling `on_message` again.
+- `send(node, her, text)` pokes `chat-dm-diff-2` with
+  `[[author sent] %add [[story author sent] [%chat ~] ~ ~] ~]` on one
+  flow per ship (through `Pokes`), and returns the message's id: its
+  `sent` `@da`, in decimal, fresh per message. `send_story()` takes a
+  story noun. `on_sent(node, her, id, error)` reports delivery.
+- `story(text)` builds a story (one paragraph, line breaks as `%break`);
+  `story_text(noun)` flattens one to text (formatting dropped, links and
+  ship mentions as text, blocks as `[kind]`).
+
+## Tests
+
+```
+python3 -m unittest bindings/python/test_bindings.py
+```
+
+Fake galaxies 220-226 on 127.0.0.1, driven from the test's own thread
+with `step()`: subscriptions across kicks and a restart, ordered pokes,
+a DM round trip, and galaxy lookups off the loop.
 
 ## Examples
 
@@ -433,7 +559,8 @@ node.run()
 
 To end it: `node.leave(her, bone, "my-agent")`, then `node.cork(her,
 bone)` once the leave is acked (`on_corked` follows when the cork is).
-A kick arrives in `on_kick`.
+A kick arrives in `on_kick`. `Subs` ([Helpers](#subs)) does all of this,
+and resubscribes after kicks.
 
 ## tlon_dms.py
 
@@ -451,36 +578,23 @@ Options: `-k KEYFILE`, `-c` or `-F SHIP` (one of them); `-s DB`
 (required); `--fresh` (passed as `breached`); `--web [ADDR:]PORT`
 (default `127.0.0.1:8474`); `--port` (the UDP port).
 
-It is in four parts.
+It is in three parts.
 
-**Stories.** Tlon messages are `story` nouns (lists of verses of
-inlines). `story(text)` builds one paragraph from plain text, with line
-breaks as `%break`; `story_text(n)` flattens a received story to text
-(formatting dropped, links and ship mentions as text, blocks as
-`[kind]`). `lst()` makes a Hoon list; `atom_ship()` and `ship_of()`
-convert between `Ship` and the `@p` atom.
+**The ship.** `DMs(m.Node)` passes a `tlon.DMs` helper
+([Tlon DMs](#tlon-dms-tlonpy)) to the node, which speaks the protocol;
+the class keeps the conversations for the page:
 
-**The ship.** `DMs(m.Node)`:
-
-- `setup()` creates `dm` (one row per conversation: ship, bone, last
-  activity, unread count) and `dm_msg` (each message, with a unique
-  index on `(ship, mine, sent)`), and the `todo` queue.
-- It runs as agent `%chat`. `on_watch` answers Tlon's version check, a
-  watch on `/~/negotiate/version/chat-dms`, with a `noun` fact of `2`
-  and accepts; other watches are dropped.
-- `on_poke` drops pokes to other agents, acks `%chat` pokes whose marks
-  aren't DM diffs (`chat-dm-diff-2`, `-1`, unversioned), and acks other
-  deltas (deletes, reactions, replies) without showing them. For an
-  `%add`, it inserts the message with `INSERT OR IGNORE` keyed on the
-  sender's `sent` time, so a message Tlon resends on a new flow is stored
-  once. The insert and the ack are one transaction.
-- `send()` opens one flow per conversation (stored in `dm.bone`, so
-  messages arrive in order) and pokes `chat-dm-diff-2` with
-  `[[author sent] %add [[story author sent] [%chat ~] ~ ~] ~]`. Each
-  message gets a fresh `@da` from `next_da()`, which is also its id. The
-  row starts as `sending`.
-- `on_done` marks the oldest `sending` message to that ship `sent` or
-  `failed`: acks on a flow come in order.
+- `setup()` creates `dm` (one row per conversation: ship, last activity,
+  unread count; its `bone` column is from before `tlon.DMs`) and
+  `dm_msg` (each message, with a unique index on `(ship, mine, sent)`),
+  and the `todo` queue.
+- `got()`, the helper's `on_message`, stores the message and counts it
+  unread, in the transaction that acks it.
+- `send()` sends with `dms.send()` and stores our message as `sending`,
+  under the id it returns; `sent()`, the helper's `on_sent`, marks it
+  `sent` or `failed`.
+- `on_done` marks acks on the flow it used before `tlon.DMs` (so a
+  database from then keeps working).
 - `on_tick` drains `todo`, running each job (`("send", ship, text)`,
   `("read", ship)`) in `with self.txn():`.
 

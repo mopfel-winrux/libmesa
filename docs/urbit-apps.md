@@ -344,12 +344,36 @@ speaks them, and `hooks.plea`/`boon`/`done` never see them
   seconds), which moves its flows with us to mesa. An `%ahoy` plea to us
   is acked; other `%$` pleas besides `%cork` are nacked.
 
+## Helpers in the bindings
+
+The Python and Go bindings carry the usual gall client code as helpers,
+so an application doesn't write it into its handlers
+([python.md](python.md#helpers), [go.md](go.md#helpers)):
+
+- **Subs** keeps subscriptions alive. It watches on a fresh flow per
+  subscription; on a kick it corks that flow (as gall does after a
+  `[%x ~]`) and watches again on a new one, at once the first time and
+  then with a growing backoff while kicks keep coming. A watch-nack ends
+  the subscription for good. A leave is followed by a cork. Facts are
+  routed by flow to the subscription they belong to.
+- **Pokes** keeps one flow per `(ship, agent)`, so pokes arrive in the
+  order sent, and numbers them so that each ack or nack can be matched
+  to its poke (acks on a flow come in order).
+- **Tlon DMs** (`tlon.py`, Go package `tlon`) speak the protocol below.
+
+Their state (which flow is which, pending resubscribes, messages already
+seen) is kept in the store beside the engine's, so it commits with each
+ack and survives restarts. Both bindings use the same keys, so a
+database works with either.
+
 ## Worked example: Tlon DMs
 
-`bindings/python/examples/tlon_dms.py` runs a ship that Tlon users can DM.
-It speaks Tlon's DM protocol as found in `tloncorp/tlon-apps`
-(`desk/app/chat.hoon`); that protocol is Tlon's, and can change upstream
-without notice. Check the current `sur/` types if something stops working.
+`bindings/python/tlon.py` and the Go package `bindings/go/tlon` speak
+Tlon's DM protocol, as found in `tloncorp/tlon-apps`
+(`desk/app/chat.hoon`); `bindings/python/examples/tlon_dms.py` (a web
+page for your DMs) and `bindings/go/examples/dmbot` (a bot) use them.
+That protocol is Tlon's, and can change upstream without notice. Check
+the current `sur/` types if something stops working.
 
 **The agent.** DMs go to agent `%chat` on the other ship, and come to
 `%chat` on ours. So we serve `%chat` and poke `%chat`.
@@ -359,16 +383,16 @@ without notice. Check the current `sur/` types if something stops working.
 mark `%noun`, noun `2`:
 
 ```python
-def on_watch(self, her, bone, agent, path):
-    if agent == AGENT and path == "/~/negotiate/version/chat-dms":
-        self.fact(her, bone, "noun", 2)
-        return True
-    return m.DROP
+def handle_watch(self, node, her, bone, agent, path):
+    if agent != AGENT or path != VERSION_PATH:
+        return None                      # not ours: the app's
+    node.fact(her, bone, "noun", VERSION)
+    return m.ACK
 ```
 
 **Sending a DM.** One flow per conversation, so our messages arrive in
-order; the bone is kept in the database and reused. Each message is a
-poke with mark `%chat-dm-diff-2`:
+order (a `Pokes` helper keeps it, in the store). Each message is a poke
+with mark `%chat-dm-diff-2`:
 
 ```
 [id=[author=@p sent=@da] %add essay=[[content=story author=@p sent=@da] kind=[%chat ~] meta=~ blob=~] time=~]
@@ -381,14 +405,15 @@ are right-associated cells and `None` is `~`:
 
 ```python
 sent = self.next_da()
-us = atom_ship(self.our)
-self.poke(who, bone, "chat", "chat-dm-diff-2",
-          ((us, sent),
-           ("add", ((story(text), us, sent), ("chat", None), None, None), None)))
+us = atom_ship(node.our)
+seq = self.pokes.poke(node, her, AGENT, MARK,
+                      ((us, sent),
+                       ("add", ((story_, us, sent), ("chat", None), None, None), None)))
 ```
 
-The ack or nack comes to `on_done`; acks on a flow come in order, so it
-marks the oldest message still sending.
+The ack or nack comes back numbered by `seq`; the helper keeps each
+pending message's id under its `seq`, and reports delivery by id
+(`on_sent`).
 
 **Stories.** `content` is a story: a list of verses. A verse is
 `[%inline (list inline)]` or `[%block ...]`. An inline is a cord (plain
@@ -403,18 +428,19 @@ with line breaks as `%break`:
 ~[[%inline ~['first line' [%break ~] 'second line']]]
 ```
 
-**Receiving a DM.** Tlon pokes our `%chat` with the same noun (the script
-accepts `%chat-dm-diff-2`, `%chat-dm-diff-1` and `%chat-dm-diff`, reading
-all three the same way). It takes the `%add` deltas: the essay's
+**Receiving a DM.** Tlon pokes our `%chat` with the same noun (the
+helper accepts any `%chat-dm-diff` mark: `-2`, `-1` and unversioned,
+reading them the same way). It takes the `%add` deltas: the essay's
 `[content author sent]` is `delta.tail.head.head`, and `sent` is the
-message id, used to ignore a message Tlon resends on a new flow. Other
-deltas (deletes, reactions, replies) are acked and not shown. Other marks
-poked at `%chat` (the script's comment names RSVPs and (un)blocks; Tlon's
-mark for the RSVP to a DM invite is `%chat-dm-rsvp`) are acked and
-ignored. Pokes to any other agent are dropped.
+message id, used to ignore a message Tlon resends on a new flow (the
+helper records each id it has seen). Other deltas (deletes, reactions,
+replies) are acked and not shown. Other marks poked at `%chat` (RSVPs
+and (un)blocks; Tlon's mark for the RSVP to a DM invite is
+`%chat-dm-rsvp`) are acked and ignored. Pokes to any other agent are
+left to the application.
 
-Each received message is stored in the transaction that acks it, so a
-crash never loses or repeats one.
+Each received message is recorded, and handed to the application, in the
+transaction that acks it, so a crash never loses or repeats one.
 
 ## Worked example: the guestbook
 

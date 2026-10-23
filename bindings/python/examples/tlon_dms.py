@@ -7,11 +7,8 @@ one conversation per ship, each just between the two of you.
     python3 tlon_dms.py -k ~sampel-palnet.key -s dms.db --web 127.0.0.1:8474
     python3 tlon_dms.py -c -s dms.db --web 8474     # as a fresh comet
 
-It speaks Tlon's DM protocol (tloncorp/tlon-apps, desk/app/chat.hoon): it
-runs as agent %chat, takes %chat-dm-diff-2 pokes, sends the same, and
-answers Tlon's version check (a watch on /~/negotiate/version/chat-dms)
-with %chat-dms version 2. A message is stored in the same transaction as
-its ack, so a crash never loses or repeats one.
+Tlon's DM protocol is the tlon module's (../tlon.py). A message is stored
+in the same transaction as its ack, so a crash never loses or repeats one.
 """
 
 import argparse
@@ -26,79 +23,13 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import libmesa as m
-
-AGENT = "chat"
-DM_MARKS = ("chat-dm-diff-2", "chat-dm-diff-1", "chat-dm-diff")
-
-# ---------------------------------------------------------------- stories
-
-def atom_ship(who):
-    return who.lo | (who.hi << 64)
-
-def ship_of(n):
-    v = int(n)
-    return m.Ship(v & ((1 << 64) - 1), v >> 64)
-
-def lst(items):
-    """a Hoon list: (a b c ~)"""
-    return tuple(items) + (None,) if items else None
-
-def story(text):
-    """a story from plain text: one paragraph, line breaks as %break"""
-    inlines = []
-    for i, line in enumerate(text.split("\n")):
-        if i:
-            inlines.append(("break", None))
-        if line:
-            inlines.append(line)
-    return lst([("inline", lst(inlines or [""]))])
-
-def story_text(n):
-    """the plain text of a story, best effort"""
-    out = []
-
-    def inline(i, d):
-        if d > 32:
-            return ""
-        if not i.is_cell:
-            return i.text()
-        tag, p = i.head.text(), i.tail
-        if tag in ("italics", "bold", "strike", "blockquote"):
-            return inlines(p, d + 1)
-        if tag == "task":
-            return inlines(p.tail, d + 1)
-        if tag in ("inline-code", "code", "tag"):
-            return ("#" if tag == "tag" else "") + p.text()
-        if tag == "ship":
-            return str(ship_of(p))
-        if tag == "break":
-            return "\n"
-        if tag == "link":
-            return p.tail.text() or p.head.text()
-        if tag == "block":
-            return p.tail.text()
-        return ""
-
-    def inlines(l, d):
-        s = []
-        while l.is_cell:
-            s.append(inline(l.head, d))
-            l = l.tail
-        return "".join(s)
-
-    while n.is_cell:
-        verse = n.head
-        kind = verse.head.text()
-        if kind == "inline":
-            out.append(inlines(verse.tail, 0))
-        elif kind == "block":
-            out.append("[%s]" % verse.tail.head.text())
-        n = n.tail
-    return "\n".join(t for t in out if t)
-
-# --------------------------------------------------------------- the ship
+import tlon
 
 class DMs(m.Node):
+    def __init__(self, *a, **k):
+        self.dms = tlon.DMs(on_message=self.got, on_sent=self.sent)
+        super().__init__(*a, helpers=[self.dms], **k)
+
     def setup(self):
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS dm (
@@ -108,86 +39,51 @@ class DMs(m.Node):
               sent TEXT, status TEXT);
             CREATE UNIQUE INDEX IF NOT EXISTS dm_msg_sent ON dm_msg (ship, mine, sent);
         """)
-        self.last_da = 0
         self.todo = queue.Queue()      #  from the web page: ("send", ship, text), ("read", ship)
-
-    def next_da(self):
-        """a fresh @da per message we send: it's the message's id"""
-        d = max(m.da(), self.last_da + (1 << 48))
-        self.last_da = d
-        return d
 
     def chat(self, name):
         """the conversation with [name], made if new"""
-        row = self.db.execute("SELECT bone FROM dm WHERE ship = ?", (name,)).fetchone()
-        if row is None:
-            self.db.execute("INSERT INTO dm (ship, last) VALUES (?, ?)", (name, time.time()))
-            return None
-        return row[0]
+        self.db.execute("INSERT OR IGNORE INTO dm (ship, last) VALUES (?, ?)",
+                        (name, time.time()))
 
     def send(self, who, text):
         """DM [text] to [who]"""
         name = str(who)
-        bone = self.chat(name)
-        if bone is None:
-            #  one flow per conversation, so our messages arrive in order
-            bone = self.open_flow(who)
-            self.db.execute("UPDATE dm SET bone = ? WHERE ship = ?", (bone, name))
-        sent = self.next_da()
-        us = atom_ship(self.our)
-        #  [id=[author sent] %add essay=[[content author sent] kind meta blob] time=~]
-        self.poke(who, bone, AGENT, "chat-dm-diff-2",
-                  ((us, sent),
-                   ("add", ((story(text), us, sent), ("chat", None), None, None), None)))
+        self.chat(name)
+        sent = self.dms.send(self, who, text)
         now = time.time()
         self.db.execute("INSERT INTO dm_msg (ship, mine, text, at, sent, status) "
-                        "VALUES (?, 1, ?, ?, ?, 'sending')", (name, text, now, str(sent)))
+                        "VALUES (?, 1, ?, ?, ?, 'sending')", (name, text, now, sent))
         self.db.execute("UPDATE dm SET last = ? WHERE ship = ?", (now, name))
         print("-> %s: %s" % (name, text), flush=True)
 
-    # ------------------------------------------------ the %chat agent
-
-    def on_watch(self, her, bone, agent, path):
-        #  Tlon's version check: we speak %chat-dms version 2
-        if agent == AGENT and path == "/~/negotiate/version/chat-dms":
-            self.fact(her, bone, "noun", 2)
-            return True
-        return m.DROP
-
-    def on_poke(self, her, agent, mark, n):
-        if agent != AGENT:
-            return m.DROP
-        if mark not in DM_MARKS:
-            return True          #  rsvps, (un)blocks: nothing to do here
-        delta = n.tail
-        if delta.head.text() != "add":
-            return True          #  deletes, reactions, replies: not shown
-        memo = delta.tail.head.head
-        sent = str(int(memo.tail.tail))
-        name = str(her)
-        text = story_text(memo.head).strip()
+    def got(self, node, msg):
+        name = str(msg.ship)
         self.chat(name)
-        #  ames delivers once per flow; this also covers Tlon resending on
-        #  a new flow (the sent time is the message's id)
+        #  INSERT OR IGNORE: messages from before tlon.DMs deduped them
         cur = self.db.execute("INSERT OR IGNORE INTO dm_msg (ship, mine, text, at, sent, "
                               "status) VALUES (?, 0, ?, ?, ?, NULL)",
-                              (name, text, time.time(), sent))
+                              (name, msg.text, time.time(), msg.id))
         if cur.rowcount:
             self.db.execute("UPDATE dm SET last = ?, unread = unread + 1 WHERE ship = ?",
                             (time.time(), name))
-            print("<- %s: %s" % (name, text), flush=True)
-        return True
+            print("<- %s: %s" % (name, msg.text), flush=True)
+
+    def sent(self, node, her, id_, error):
+        self.db.execute("UPDATE dm_msg SET status = ? WHERE ship = ? AND mine = 1 AND sent = ?",
+                        ("failed" if error else "sent", str(her), id_))
+        if error:
+            print("!! %s refused a message: %s" % (her, " / ".join(error[:2])), flush=True)
 
     def on_done(self, her, bone, error):
-        #  acks come in order on each flow: the oldest message still sending
+        #  acks for messages sent on the flow this used before tlon.DMs:
+        #  they come in order, so they're for the oldest still sending
         row = self.db.execute("SELECT id FROM dm_msg WHERE ship = ? AND mine = 1 AND "
                               "status = 'sending' ORDER BY id LIMIT 1",
                               (str(her),)).fetchone()
         if row:
             self.db.execute("UPDATE dm_msg SET status = ? WHERE id = ?",
                             ("failed" if error else "sent", row[0]))
-        if error:
-            print("!! %s refused a message: %s" % (her, " / ".join(error[:2])), flush=True)
 
     def on_tick(self):
         while not self.todo.empty():

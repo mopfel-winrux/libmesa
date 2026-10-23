@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"flag"
 	"fmt"
 	"os"
@@ -25,58 +24,22 @@ import (
 	"time"
 
 	mesa "github.com/mopfel-winrux/libmesa/bindings/go"
+	"github.com/mopfel-winrux/libmesa/bindings/go/tlon"
 	_ "modernc.org/sqlite"
 )
 
-const agent = "chat"
-
 type bot struct {
-	mesa.BaseApp
-	db      *sql.Conn
+	dms     tlon.DMs
 	started time.Time
-	lastDa  time.Time
 }
 
-func (b *bot) exec(q string, args ...any) error {
-	_, err := b.db.ExecContext(context.Background(), q, args...)
+// message answers a DM, in the transaction that acks it.
+func (b *bot) message(n *mesa.Node, m tlon.Message) error {
+	fmt.Printf("<- %s: %s\n", m.From, m.Text)
+	text := b.reply(m.From, m.Text)
+	fmt.Printf("-> %s: %s\n", m.From, text)
+	_, err := b.dms.Send(n, m.From, text)
 	return err
-}
-
-// Watch: Tlon's version check before it DMs us.
-func (b *bot) Watch(n *mesa.Node, her mesa.Ship, bone uint64, ag, path string) error {
-	if ag == agent && path == "/~/negotiate/version/chat-dms" {
-		return n.Fact(her, bone, "noun", 2)
-	}
-	return mesa.Drop
-}
-
-func (b *bot) Poke(n *mesa.Node, her mesa.Ship, bone uint64, ag, mark string, noun mesa.Noun) error {
-	if ag != agent {
-		return mesa.Drop
-	}
-	if !strings.HasPrefix(mark, "chat-dm-diff") {
-		return nil // rsvps, (un)blocks: nothing to do
-	}
-	//  [id=[author sent] %add essay=[[content author sent] kind meta blob] time]
-	delta := noun.Tail()
-	if delta.Head().Text() != "add" {
-		return nil // deletes, reactions, replies
-	}
-	memo := delta.Tail().Head().Head()
-	sent := memo.Tail().Tail().Big().String()
-	text := strings.TrimSpace(storyText(memo.Head()))
-
-	//  Tlon may resend a message on a new flow: its sent time is its id
-	res, err := b.db.ExecContext(context.Background(),
-		"INSERT OR IGNORE INTO seen (ship, sent) VALUES (?, ?)", her.String(), sent)
-	if err != nil {
-		return err
-	}
-	if k, _ := res.RowsAffected(); k == 0 {
-		return nil
-	}
-	fmt.Printf("<- %s: %s\n", her, text)
-	return b.send(n, her, b.reply(her, text))
 }
 
 func (b *bot) reply(her mesa.Ship, text string) string {
@@ -91,116 +54,6 @@ func (b *bot) reply(her mesa.Ship, text string) string {
 		return fmt.Sprintf("you are %s (a %s)", her, rankName(her.Rank()))
 	}
 	return "you said: " + text
-}
-
-// send DMs [text] to [her], on one flow per conversation so our messages
-// arrive in order.
-func (b *bot) send(n *mesa.Node, her mesa.Ship, text string) error {
-	var bone uint64
-	err := b.db.QueryRowContext(context.Background(),
-		"SELECT bone FROM dm WHERE ship = ?", her.String()).Scan(&bone)
-	if err == sql.ErrNoRows {
-		if bone, err = n.OpenFlow(her); err == nil {
-			err = b.exec("INSERT INTO dm (ship, bone) VALUES (?, ?)", her.String(), bone)
-		}
-	}
-	if err != nil {
-		return err
-	}
-	//  a fresh @da per message: it's the message's id
-	now := time.Now()
-	if !now.After(b.lastDa) {
-		now = b.lastDa.Add(time.Millisecond)
-	}
-	b.lastDa = now
-	sent := mesa.Da(now)
-	us := n.Ship()
-	essay := mesa.Tuple(mesa.Tuple(story(text), us, sent), mesa.Tuple("chat", nil), nil, nil)
-	fmt.Printf("-> %s: %s\n", her, text)
-	return n.Poke(her, bone, agent, "chat-dm-diff-2",
-		mesa.Tuple(mesa.Tuple(us, sent), mesa.Tuple("add", essay, nil)))
-}
-
-func (b *bot) Done(n *mesa.Node, her mesa.Ship, bone uint64, err *mesa.Nack) {
-	if err != nil {
-		fmt.Printf("!! %s refused a message: %v\n", her, err)
-	}
-}
-
-// story is plain text as a Tlon story: one paragraph, lines broken.
-func story(text string) mesa.Value {
-	var inl []mesa.Value
-	for i, line := range strings.Split(text, "\n") {
-		if i > 0 {
-			inl = append(inl, mesa.Tuple("break", nil))
-		}
-		if line != "" {
-			inl = append(inl, line)
-		}
-	}
-	if len(inl) == 0 {
-		inl = append(inl, "")
-	}
-	return mesa.List(mesa.Tuple("inline", mesa.List(inl...)))
-}
-
-// storyText is a story's plain text, best effort.
-func storyText(s mesa.Noun) string {
-	var out []string
-	for _, verse := range s.List() {
-		switch verse.Head().Text() {
-		case "inline":
-			out = append(out, inlines(verse.Tail(), 0))
-		case "block":
-			out = append(out, "["+verse.Tail().Head().Text()+"]")
-		}
-	}
-	return strings.Join(out, "\n")
-}
-
-func inlines(l mesa.Noun, depth int) string {
-	var b strings.Builder
-	for _, i := range l.List() {
-		b.WriteString(inline(i, depth))
-	}
-	return b.String()
-}
-
-func inline(i mesa.Noun, depth int) string {
-	if depth > 32 {
-		return ""
-	}
-	if i.IsAtom() {
-		return i.Text()
-	}
-	p := i.Tail()
-	switch i.Head().Text() {
-	case "italics", "bold", "strike", "blockquote":
-		return inlines(p, depth+1)
-	case "inline-code", "code":
-		return p.Text()
-	case "tag":
-		return "#" + p.Text()
-	case "ship":
-		b := p.Bytes()
-		var s mesa.Ship
-		for k := 0; k < len(b) && k < 16; k++ {
-			if k < 8 {
-				s.Lo |= uint64(b[k]) << (8 * k)
-			} else {
-				s.Hi |= uint64(b[k]) << (8 * (k - 8))
-			}
-		}
-		return s.String()
-	case "break":
-		return "\n"
-	case "link":
-		if t := p.Tail().Text(); t != "" {
-			return t
-		}
-		return p.Head().Text()
-	}
-	return ""
 }
 
 func rankName(r mesa.Rank) string {
@@ -241,18 +94,15 @@ func main() {
 		os.Exit(1)
 	}
 	defer st.Close()
-	for _, q := range []string{
-		"CREATE TABLE IF NOT EXISTS dm (ship TEXT PRIMARY KEY, bone INTEGER NOT NULL)",
-		"CREATE TABLE IF NOT EXISTS seen (ship TEXT, sent TEXT, PRIMARY KEY (ship, sent))",
-	} {
-		if _, err := st.Conn().ExecContext(context.Background(), q); err != nil {
-			fmt.Fprintln(os.Stderr, "dmbot:", err)
-			os.Exit(1)
+	b := &bot{started: time.Now()}
+	b.dms.OnMessage = b.message
+	b.dms.OnSent = func(n *mesa.Node, her mesa.Ship, id string, err *mesa.Nack) {
+		if err != nil {
+			fmt.Printf("!! %s refused a message: %v\n", her, err)
 		}
 	}
-
-	b := &bot{db: st.Conn(), started: time.Now()}
-	n, err := mesa.Open(mesa.Config{Identity: id, Store: st, App: b, Port: *port})
+	n, err := mesa.Open(mesa.Config{Identity: id, Store: st, Port: *port,
+		Helpers: []mesa.Helper{&b.dms}})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "dmbot:", err)
 		os.Exit(1)

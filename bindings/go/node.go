@@ -175,6 +175,10 @@ type Config struct {
 
 	// Trace logs every datagram (also set by $MESA_TRACE).
 	Trace bool
+
+	// Helpers see requests and responses before App does (see Helper):
+	// Subs, Pokes, or tlon.DMs. Each is started after the engine opens.
+	Helpers []Helper
 }
 
 // Node is a ship on the network.
@@ -198,8 +202,12 @@ type Node struct {
 	h     cgo.Handle
 	conn  *net.UDPConn
 
+	helpers []Helper
+
 	tid    atomic.Int64 // the OS thread the engine runs on (0: none)
 	inHook bool         // inside the engine's own transaction
+
+	direct sync.Mutex // held by Do while it runs fn itself, before Run
 
 	mu     sync.Mutex
 	jobs   []func()
@@ -249,6 +257,7 @@ func Open(cfg Config) (*Node, error) {
 	if n.app == nil {
 		n.app = BaseApp{}
 	}
+	n.helpers = cfg.Helpers
 	if n.az == "" {
 		n.az = AzimuthURL
 	}
@@ -325,7 +334,29 @@ func Open(cfg Config) (*Node, error) {
 		n.h.Delete()
 		return nil, err
 	}
+	for _, h := range n.helpers {
+		if err := h.Start(n); err != nil {
+			n.Close()
+			return nil, err
+		}
+	}
 	return n, nil
+}
+
+// Store is the node's store, for helpers that keep state beside the
+// engine's (in the same transactions).
+func (n *Node) Store() Store { return n.cfg.Store }
+
+// After runs fn on the loop, in one transaction, once d has passed (or
+// never, if the node closes first). Its error is logged.
+func (n *Node) After(d time.Duration, fn func() error) {
+	time.AfterFunc(d, func() {
+		n.post(func() {
+			if err := n.txn(fn); err != nil {
+				logf("mesa: after: %v", err)
+			}
+		})
+	})
 }
 
 // Ship is who we are.
@@ -357,17 +388,22 @@ func (n *Node) post(fn func()) bool {
 // Call it from any goroutine but the Node's own (there, call the API
 // directly), or before Run, when it runs fn right away.
 func (n *Node) Do(fn func() error) error {
+	n.direct.Lock()
 	n.mu.Lock()
 	running, closed := n.done != nil, n.closed
 	n.mu.Unlock()
 	if closed {
+		n.direct.Unlock()
 		return ErrClosed
 	}
 	if !running {
+		//  Run waits for us before it takes the engine
+		defer n.direct.Unlock()
 		n.pin()
 		defer n.unpin()
 		return n.txn(fn)
 	}
+	n.direct.Unlock()
 	res := make(chan error, 1)
 	if !n.post(func() { res <- n.txn(fn) }) {
 		return ErrClosed
@@ -411,6 +447,10 @@ func (n *Node) Run(ctx context.Context) error {
 	n.done = make(chan struct{})
 	n.mu.Unlock()
 	defer close(n.done)
+
+	//  a Do already running fn itself finishes first
+	n.direct.Lock()
+	n.direct.Unlock()
 
 	n.pin()
 	defer n.unpin()
@@ -668,9 +708,23 @@ func goPlea(ctx C.uintptr_t, her *C.mesa_ship, bone C.uint64_t, vane, path, payl
 	var req C.mesa_gall_request
 	switch C.mesa_gall_request_parse(vane, path, payload, &req) {
 	case C.MESA_GALL_POKE:
-		err = n.app.Poke(n, who, b, C.GoString(&req.agent[0]), Noun{req.mark}.Text(), Noun{req.noun})
+		agent, mark, noun := C.GoString(&req.agent[0]), Noun{req.mark}.Text(), Noun{req.noun}
+		for _, h := range n.helpers {
+			if ok, e := h.HandlePoke(n, who, b, agent, mark, noun); ok {
+				err = e
+				return
+			}
+		}
+		err = n.app.Poke(n, who, b, agent, mark, noun)
 	case C.MESA_GALL_WATCH, C.MESA_GALL_WATCH_AS:
-		err = n.app.Watch(n, who, b, C.GoString(&req.agent[0]), Noun{req.path}.Path())
+		agent, path := C.GoString(&req.agent[0]), Noun{req.path}.Path()
+		for _, h := range n.helpers {
+			if ok, e := h.HandleWatch(n, who, b, agent, path); ok {
+				err = e
+				return
+			}
+		}
+		err = n.app.Watch(n, who, b, agent, path)
 	case C.MESA_GALL_LEAVE:
 		n.app.Leave(n, who, b, C.GoString(&req.agent[0]))
 	case C.MESA_GALL_SYSTEM:
@@ -685,11 +739,23 @@ func goBoon(ctx C.uintptr_t, her *C.mesa_ship, bone C.uint64_t, payload C.mesa_n
 	n := nodeOf(ctx)
 	n.hook("boon", func() {
 		var mark, noun C.mesa_noun
+		who, b := shipOf(her), uint64(bone)
 		switch C.mesa_gall_response(payload, &mark, &noun) {
 		case C.MESA_GALL_FACT:
-			n.app.Fact(n, shipOf(her), uint64(bone), Noun{mark}.Text(), Noun{noun})
+			m := Noun{mark}.Text()
+			for _, h := range n.helpers {
+				if h.HandleFact(n, who, b, m, Noun{noun}) {
+					return
+				}
+			}
+			n.app.Fact(n, who, b, m, Noun{noun})
 		case C.MESA_GALL_KICK:
-			n.app.Kick(n, shipOf(her), uint64(bone))
+			for _, h := range n.helpers {
+				if h.HandleKick(n, who, b) {
+					return
+				}
+			}
+			n.app.Kick(n, who, b)
 		default:
 			n.app.Boon(n, shipOf(her), uint64(bone), Noun{payload})
 		}
@@ -704,6 +770,11 @@ func goDone(ctx C.uintptr_t, her *C.mesa_ship, bone C.uint64_t, err C.mesa_noun)
 		if err != none {
 			nack = nackOf(Noun{err})
 		}
+		for _, h := range n.helpers {
+			if h.HandleDone(n, shipOf(her), uint64(bone), nack) {
+				return
+			}
+		}
 		n.app.Done(n, shipOf(her), uint64(bone), nack)
 	})
 }
@@ -711,7 +782,14 @@ func goDone(ctx C.uintptr_t, her *C.mesa_ship, bone C.uint64_t, err C.mesa_noun)
 //export goCorked
 func goCorked(ctx C.uintptr_t, her *C.mesa_ship, bone C.uint64_t) {
 	n := nodeOf(ctx)
-	n.hook("corked", func() { n.app.Corked(n, shipOf(her), uint64(bone)) })
+	n.hook("corked", func() {
+		for _, h := range n.helpers {
+			if h.HandleCorked(n, shipOf(her), uint64(bone)) {
+				return
+			}
+		}
+		n.app.Corked(n, shipOf(her), uint64(bone))
+	})
 }
 
 //export goSage
@@ -755,7 +833,12 @@ func goPeek(ctx C.uintptr_t, her *C.mesa_ship, path *C.char) (res C.mesa_noun) {
 //export goBreach
 func goBreach(ctx C.uintptr_t, her *C.mesa_ship) {
 	n := nodeOf(ctx)
-	n.hook("breach", func() { n.app.Breach(n, shipOf(her)) })
+	n.hook("breach", func() {
+		for _, h := range n.helpers {
+			h.HandleBreach(n, shipOf(her))
+		}
+		n.app.Breach(n, shipOf(her))
+	})
 }
 
 //  ---------------------------------------------------------------- API
