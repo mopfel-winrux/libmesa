@@ -165,6 +165,7 @@ pub fn build(b: *std.Build) !void {
                 host.linkLibrary(uv.artifact("libuv"));
                 host.linkLibrary(curl.artifact("curl"));
                 host.bundle_ubsan_rt = true;
+                if (target.result.os.tag.isDarwin()) host.bundle_compiler_rt = true;
                 addIncludes(b, host, urcrypt);
                 host.addCSourceFiles(.{
                     .root = b.path("src"),
@@ -371,8 +372,10 @@ fn addCore(
     lib.addIncludePath(sqlite.path("."));
 
     //  Debug builds are compiled with UBSan; bundle its runtime so the
-    //  archive links from non-zig toolchains
+    //  archive links from non-zig toolchains (on macOS with compiler-rt,
+    //  which the runtime needs and Apple's linker doesn't supply)
     lib.bundle_ubsan_rt = true;
+    if (lib.rootModuleTarget().os.tag.isDarwin()) lib.bundle_compiler_rt = true;
 
     addIncludes(b, lib, urcrypt);
 
