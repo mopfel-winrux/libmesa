@@ -53,7 +53,7 @@ _mine(mesa_ident* ide)
   }
   mesa_unref(lis);
 
-  if ( 64 != getrandom(eny, 64, 0) ) return 0;
+  if ( 0 != getentropy(eny, 64) ) return 0;   //  Linux and macOS
   fprintf(stderr, "mining a comet under %zu stars...\n", len);
   return mesa_comet_mine(len, sta, eny, UINT64_MAX, ide);
 }

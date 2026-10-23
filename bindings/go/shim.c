@@ -4,6 +4,8 @@
 
 #include "shim.h"
 
+#include <pthread.h>
+
 #include "_cgo_export.h"
 
 //  engine hooks
@@ -146,4 +148,10 @@ mesa_go_scan_row(void* fun, void* arg, const uint8_t* key, size_t key_len,
                  const uint8_t* val, size_t val_len)
 {
   return ((mesa_store_scan_f)fun)(arg, key, key_len, val, val_len);
+}
+
+uint64_t
+mesa_go_thread(void)
+{
+  return (uint64_t)(uintptr_t)pthread_self();
 }

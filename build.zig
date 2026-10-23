@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) !void {
             .pic = true, //  libmesa.so bundles it
         }),
     });
-    sql.linkLibC();
+    linkC(b, sql);
     sql.addCSourceFiles(.{
         .root = sqlite.path("."),
         .files = &.{"sqlite3.c"},
@@ -111,6 +111,23 @@ pub fn build(b: *std.Build) !void {
     b.installArtifact(crypt);
     b.installArtifact(sql);
 
+    //  pkg-config: relocatable (paths are relative to the .pc file), so
+    //  an install prefix can be moved or unpacked anywhere
+    //
+    installPc(b, "libmesa.pc", b.fmt(
+        \\prefix=${{pcfiledir}}/../..
+        \\libdir=${{prefix}}/lib
+        \\includedir=${{prefix}}/include
+        \\
+        \\Name: libmesa
+        \\Description: Urbit's mesa protocol: be a ship from any program
+        \\Version: {s}
+        \\Cflags: -I${{includedir}}
+        \\Libs: -L${{libdir}} -lmesa
+        \\Libs.private: -lmesa-urcrypt -lmesa-sqlite -lm -lpthread
+        \\
+    , .{version}));
+
     //
     //  tests
     //
@@ -123,9 +140,18 @@ pub fn build(b: *std.Build) !void {
 
     const no_host = b.option(bool, "no-host", "Don't build libmesa-host (libuv, curl, OpenSSL)") orelse false;
     if (!no_host) {
-        const no_lto = target.result.os.tag == .macos;
+        //  LTO archives hold LLVM bitcode, which only zig (or clang with
+        //  the same LLVM) can link; the installed archives must link
+        //  with any cc, so it's off unless asked for
+        const lto = b.option(bool, "lto", "Build libuv, curl and OpenSSL with LTO (their archives then link only with zig)") orelse false;
+        const no_lto = !lto or target.result.os.tag == .macos;
         if (b.lazyDependency("libuv", .{ .target = target, .optimize = optimize, .no_lto = no_lto })) |uv| {
             if (b.lazyDependency("curl", .{ .target = target, .optimize = optimize, .no_lto = no_lto })) |curl| {
+                const openssl = curl.builder.dependency("openssl", .{
+                    .target = target,
+                    .optimize = optimize,
+                    .no_lto = no_lto,
+                });
                 const host = b.addLibrary(.{
                     .name = "mesa-host",
                     .linkage = .static,
@@ -134,7 +160,7 @@ pub fn build(b: *std.Build) !void {
                         .optimize = optimize,
                     }),
                 });
-                host.linkLibC();
+                linkC(b, host);
                 host.linkLibrary(lib);
                 host.linkLibrary(uv.artifact("libuv"));
                 host.linkLibrary(curl.artifact("curl"));
@@ -146,8 +172,40 @@ pub fn build(b: *std.Build) !void {
                     .flags = flags.items,
                 });
                 b.installArtifact(host);
-                b.installArtifact(uv.artifact("libuv"));
-                b.installArtifact(curl.artifact("curl"));
+
+                //  the host's dependencies, renamed so they can't be
+                //  mistaken for (or shadow) the system's libuv, libcurl
+                //  or OpenSSL. Only uv.h is public (mesa_host_config's
+                //  loop); curl's and OpenSSL's headers stay internal.
+                //
+                const deps = [_]struct { art: *std.Build.Step.Compile, name: []const u8, hdr: bool }{
+                    .{ .art = uv.artifact("libuv"), .name = "mesa-uv", .hdr = true },
+                    .{ .art = curl.artifact("curl"), .name = "mesa-curl", .hdr = false },
+                    .{ .art = openssl.artifact("ssl"), .name = "mesa-ssl", .hdr = false },
+                    .{ .art = openssl.artifact("crypto"), .name = "mesa-crypto", .hdr = false },
+                };
+                for (deps) |d| {
+                    if (d.hdr) {
+                        b.getInstallStep().dependOn(&b.addInstallArtifact(d.art, .{ .dest_dir = .disabled }).step);
+                    }
+                    b.getInstallStep().dependOn(&b.addInstallLibFile(
+                        d.art.getEmittedBin(),
+                        b.fmt("{s}{s}{s}", .{ t.libPrefix(), d.name, t.staticLibSuffix() }),
+                    ).step);
+                }
+                installPc(b, "libmesa-host.pc", b.fmt(
+                    \\prefix=${{pcfiledir}}/../..
+                    \\libdir=${{prefix}}/lib
+                    \\includedir=${{prefix}}/include
+                    \\
+                    \\Name: libmesa-host
+                    \\Description: A ready-made libmesa host: libuv loop, UDP, galaxy DNS, azimuth over HTTPS
+                    \\Version: {s}
+                    \\Requires: libmesa
+                    \\Cflags: -I${{includedir}}
+                    \\Libs: -L${{libdir}} -lmesa-host -lmesa-curl -lmesa-ssl -lmesa-crypto -lmesa-uv {s}
+                    \\
+                , .{ version, if (t.os.tag.isDarwin()) "-lpthread" else "-lpthread -ldl" }));
 
                 //  mesa-ping: poke a ship from the command line;
                 //  mesa-guestbook: an example application
@@ -164,7 +222,7 @@ pub fn build(b: *std.Build) !void {
                             .optimize = optimize,
                         }),
                     });
-                    tool.linkLibC();
+                    linkC(b, tool);
                     tool.linkLibrary(host);
                     tool.linkLibrary(uv.artifact("libuv"));
                     tool.linkLibrary(curl.artifact("curl"));
@@ -206,7 +264,7 @@ pub fn build(b: *std.Build) !void {
             }),
         });
 
-        exe.linkLibC();
+        linkC(b, exe);
         exe.linkLibrary(lib);
         exe.linkLibrary(crypt);
         exe.linkLibrary(sql);
@@ -228,6 +286,29 @@ pub fn build(b: *std.Build) !void {
     }
 }
 
+const version = "0.0.1"; //  as build.zig.zon
+
+//  linkC(): libc, and when cross-compiling to macOS, the SDK's headers
+//  and libraries (a native macOS build finds them itself)
+//
+fn linkC(b: *std.Build, c: *std.Build.Step.Compile) void {
+    c.linkLibC();
+    const target = c.root_module.resolved_target.?;
+    if (target.result.os.tag.isDarwin() and !target.query.isNative()) {
+        if (b.lazyDependency("macos_sdk", .{})) |sdk| {
+            c.addSystemIncludePath(sdk.path("usr/include"));
+            c.addLibraryPath(sdk.path("usr/lib"));
+            c.addFrameworkPath(sdk.path("System/Library/Frameworks"));
+        }
+    }
+}
+
+fn installPc(b: *std.Build, name: []const u8, text: []const u8) void {
+    const wf = b.addWriteFiles();
+    const pc = wf.add(name, text);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(pc, .lib, b.fmt("pkgconfig/{s}", .{name})).step);
+}
+
 fn addE2e(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -245,7 +326,7 @@ fn addE2e(
             .optimize = optimize,
         }),
     });
-    exe.linkLibC();
+    linkC(b, exe);
     exe.linkLibrary(lib);
     exe.linkLibrary(crypt);
     exe.linkLibrary(sql);
@@ -284,7 +365,7 @@ fn addCore(
     urcrypt: *std.Build.Dependency,
     flags: []const []const u8,
 ) void {
-    lib.linkLibC();
+    linkC(b, lib);
     lib.linkLibrary(crypt);
     lib.linkLibrary(sql);
     lib.addIncludePath(sqlite.path("."));
@@ -358,7 +439,7 @@ fn libcrypt(
         }),
     });
 
-    lib.linkLibC();
+    linkC(b, lib);
 
     lib.addIncludePath(dep.path("urcrypt"));
     lib.addIncludePath(dep.path("blake3"));

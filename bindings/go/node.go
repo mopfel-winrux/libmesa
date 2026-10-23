@@ -16,7 +16,6 @@ import (
 	"runtime/cgo"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unsafe"
 )
@@ -760,7 +759,7 @@ func goBreach(ctx C.uintptr_t, her *C.mesa_ship) {
 //  ---------------------------------------------------------------- API
 
 func (n *Node) onLoop() error {
-	if t := n.tid.Load(); t == 0 || t != int64(syscall.Gettid()) {
+	if t := n.tid.Load(); t == 0 || t != int64(C.mesa_go_thread()) {
 		return ErrNotOnLoop
 	}
 	return nil
@@ -769,7 +768,7 @@ func (n *Node) onLoop() error {
 // pin makes this goroutine the engine's, until unpin.
 func (n *Node) pin() {
 	runtime.LockOSThread()
-	n.tid.Store(int64(syscall.Gettid()))
+	n.tid.Store(int64(C.mesa_go_thread()))
 }
 
 func (n *Node) unpin() {
