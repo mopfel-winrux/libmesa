@@ -1,0 +1,84 @@
+#  On a v* tag: build an install prefix per target (headers, static
+#  archives, libmesa.so/.dylib, pkg-config files, the tools), check the
+#  native one links with the system cc, and attach them all to a GitHub
+#  release.
+#
+#    git tag v0.1.0 && git push origin v0.1.0
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  ZIG_VERSION: 0.15.2
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-linux-gnu.2.28
+            name: x86_64-linux
+          - target: aarch64-linux-gnu.2.28
+            name: aarch64-linux
+          - target: x86_64-macos
+            name: x86_64-macos
+          - target: aarch64-macos
+            name: aarch64-macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install zig
+        run: |
+          d=zig-x86_64-linux-$ZIG_VERSION
+          curl -fsSL "https://ziglang.org/download/$ZIG_VERSION/$d.tar.xz" | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$d" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: |
+          dir=libmesa-${GITHUB_REF_NAME}-${{ matrix.name }}
+          echo "DIR=$dir" >> "$GITHUB_ENV"
+          zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.target }} -p "$RUNNER_TEMP/$dir"
+          cp LICENSE.txt README.md "$RUNNER_TEMP/$dir/"
+
+      - name: Link against it
+        if: matrix.name == 'x86_64-linux'
+        run: test/install/check.sh "$RUNNER_TEMP/$DIR"
+
+      - name: Package
+        run: |
+          tar -C "$RUNNER_TEMP" -czf "$DIR.tar.gz" "$DIR"
+          sha256sum "$DIR.tar.gz" > "$DIR.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DIR }}
+          path: |
+            ${{ env.DIR }}.tar.gz
+            ${{ env.DIR }}.tar.gz.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            $(case "$GITHUB_REF_NAME" in *-*) echo --prerelease;; esac)

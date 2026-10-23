@@ -24,5 +24,10 @@ for t in engine store gall noun ident azimuth crypto aes_siv; do
   $CC $CORE test/${t}_test.c "$OUT/sqlite3.o" zig-out/lib/libmesa-urcrypt.a \
       -lpthread -lm -o "$OUT/$t-test"
   echo "== $t"
-  "$OUT/$t-test" 2>&1 | tail -2
+  #  not piped: a failing test (or a sanitizer report) fails the script
+  if ! "$OUT/$t-test" > "$OUT/$t.log" 2>&1; then
+    tail -40 "$OUT/$t.log"
+    exit 1
+  fi
+  tail -2 "$OUT/$t.log"
 done
