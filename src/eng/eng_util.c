@@ -242,7 +242,7 @@ eng_key(c3_y typ_y, u3_ship who_u, c3_d bon_d, eng_dire dir_e,
 
   _put_be(key_y + 1, who_u[1]);
   _put_be(key_y + 9, who_u[0]);
-  if ( KEY_PEER == typ_y ) {
+  if ( (KEY_PEER == typ_y) || (KEY_GALL == typ_y) ) {
     return 17;
   }
 

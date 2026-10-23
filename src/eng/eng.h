@@ -58,6 +58,7 @@ typedef struct _eng_flow {
   eng_dire  dir_e;
   c3_o      clo_o;           //  closing
   c3_o      hat_o;           //  halt
+  mesa_noun hag;             //  backward: the agent we flubbed for, or NONE
   //  snd
   c3_d      nex_d;           //  next seq to assign (starts at 1)
   c3_w      win_w;           //  send-window (max 1)
@@ -151,6 +152,8 @@ struct _eng_peer {
   c3_o          jao_o;       //  jael /public-keys flow open (they're a parent)
   c3_d          jab_d;       //    its bone
   c3_o          moa_o;       //  moon: asked our parent for our keys
+  c3_o          gbo_o;       //  their gall /gf flow to us (for our flubs)
+  c3_d          gbb_d;       //    its bone
   //  classic ames (eng_ames.c)
   c3_o          aho_o;       //  we've asked them to move to mesa
   c3_d          ahb_d;       //    on this bone
@@ -373,6 +376,9 @@ c3_o      eng_sys_boon(mesa_engine* eng, eng_peer* per_u, c3_d bon_d,
 c3_o      eng_sys_done(mesa_engine* eng, eng_peer* per_u, c3_d bon_d,
                        mesa_noun err);
 void      eng_sys_breach(mesa_engine* eng, eng_peer* per_u);
+c3_o      eng_sys_flub(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
+                       mesa_noun van, mesa_noun pax);
+void      eng_sys_spur(mesa_engine* eng, const c3_c* dap_c);
 void      eng_point_apply(mesa_engine* eng, const mesa_point* pot);
 
 /* keys for the store
@@ -382,6 +388,7 @@ void      eng_point_apply(mesa_engine* eng, const mesa_point* pot);
 #define KEY_FLOW  'F'
 #define KEY_LOAD  'L'
 #define KEY_CORK  'C'
+#define KEY_GALL  'G'    //  their /gf bone, for telling them our flubs
 
 c3_z eng_key(c3_y typ_y, u3_ship who_u, c3_d bon_d, eng_dire dir_e,
              c3_d seq_d, c3_y key_y[40]);

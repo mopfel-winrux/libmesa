@@ -180,6 +180,7 @@ typedef struct _node {
   _rcv*        rcv_u;
   c3_w         nak_w;    //  nack the next n pleas
   c3_w         dro_w;    //  drop the next n pleas
+  c3_w         flu_w;    //  flub the next n pleas
   c3_o         bon_o;    //  answer each plea with a boon
   c3_o         lat_o;    //  answer pleas later
   c3_w         drp_w;    //  drop rate, percent
@@ -318,6 +319,12 @@ _h_plea(void* ctx, mesa_ship her, uint64_t bone, mesa_noun vane,
     _record(nod, "drop", her, bone, payload);
     mesa_flow_boon(nod->eng, her, bone, mesa_atom_cord("undone"));
     return MESA_DROP;
+  }
+  if ( nod->flu_w ) {
+    nod->flu_w--;
+    _record(nod, "flub", her, bone, payload);
+    mesa_flow_boon(nod->eng, her, bone, mesa_atom_cord("undone"));
+    return MESA_FLUB;
   }
   if ( nod->nak_w ) {
     nod->nak_w--;
@@ -843,6 +850,45 @@ _test_drop(_node* zod, _node* nec)
   _clear(zod); _clear(nec);
 }
 
+/* MESA_FLUB: the sender stops until we spur, across a restart
+*/
+static void
+_test_flub_ours(_node* zod, _node* nec)
+{
+  c3_d bon_d, sen_d0;
+
+  mesa_flow_open(zod->eng, nec->who, &bon_d);
+  nec->flu_w = 1;
+  _send(zod, nec, bon_d, mesa_atom_cord("anyone home?"));
+  _run(5000);
+  expect(1 == _count(nec, "flub"), "flubbed: %u", _count(nec, "flub"));
+  expect(0 == _count(zod, "done"), "no answer");
+
+  sen_d0 = sen_d;
+  _run(30 * 60 * 1000);
+  expect(sen_d - sen_d0 < 3, "sender halted: %" PRIu64 " datagrams",
+         sen_d - sen_d0);
+  expect(1 == _count(nec, "flub"), "not asked again: %u", _count(nec, "flub"));
+
+  _restart(nec);
+  expect(MESA_OK == mesa_spur(nec->eng, "other"), "spur other");
+  _run(60000);
+  expect(0 == _count(nec, "plea"), "other agent: still halted");
+
+  expect(MESA_OK == mesa_spur(nec->eng, "test"), "spur");
+  _run(5 * 60 * 1000);
+  expect(1 == _count(nec, "plea"), "resent once spurred: %u",
+         _count(nec, "plea"));
+  expect(1 == _count(zod, "done"), "answered: %u", _count(zod, "done"));
+  if ( _count(zod, "done") ) {
+    expect(MESA_NONE == _nth(zod, "done", 0)->som, "an ack");
+  }
+  expect(0 == _count(zod, "boon"), "no boons for the app: %u",
+         _count(zod, "boon"));
+  expect(MESA_E_ARG == mesa_spur(nec->eng, ""), "spur needs an agent");
+  _clear(zod); _clear(nec);
+}
+
 /* MESA_LATER: ack after the handler returns
 */
 static void
@@ -1175,6 +1221,7 @@ main(int argc, char* argv[])
   _test_cork(zod, nec);
   _test_later(zod, nec);
   _test_drop(zod, nec);
+  _test_flub_ours(zod, nec);
   _test_loss(zod, nec);
   _test_restart(zod, nec);
   _test_comet(nec);

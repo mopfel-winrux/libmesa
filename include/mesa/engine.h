@@ -64,8 +64,12 @@ typedef enum mesa_plea_result {
   MESA_LATER = 2,   //  will call mesa_flow_done() later
   MESA_DROP  = 3,   //  not ours: don't answer at all; its writes are rolled
                     //  back (with a store that has savepoints) and the peer
-                    //  will resend it, e.g. a poke to an agent we don't run
-                    //  (as Arvo drops pleas for agents that aren't running)
+                    //  will resend it
+  MESA_FLUB  = 4,   //  a gall request to an agent we don't run (now): as
+                    //  DROP, and tell the sender to stop resending on this
+                    //  flow until mesa_spur() says the agent is back, as
+                    //  Arvo's gall does for agents that aren't running.
+                    //  For requests to other vanes, the same as DROP.
 } mesa_plea_result;
 
 typedef struct mesa_hooks {
@@ -131,11 +135,13 @@ typedef struct mesa_config {
   mesa_store* store;
   mesa_hooks  hooks;
 
-  /* our_sponsor: our sponsor (from azimuth for stars and planets, our
-  **              parent for moons); ignored for comets and galaxies,
-  **              whose sponsor is fixed.
+  /* our_sponsor: our sponsor (from azimuth) for stars and planets, used
+  **              if [has_sponsor]; otherwise our default sponsor (the
+  **              star or galaxy our name derives from). Ignored for
+  **              galaxies, moons and comets, whose sponsor is fixed.
   */
   mesa_ship   our_sponsor;
+  bool        has_sponsor;
 
   /* breached: allow starting this identity with an empty store.
   **
@@ -242,6 +248,12 @@ mesa_err mesa_flow_boon(mesa_engine* eng, mesa_ship her, uint64_t bone,
                         mesa_noun payload);
 mesa_err mesa_flow_done(mesa_engine* eng, mesa_ship her, uint64_t bone,
                         mesa_noun error);
+
+/* mesa_spur(): [agent] (a @tas, e.g. "chat") is running again: resume
+**              the flows we halted with MESA_FLUB for it, and tell their
+**              senders to resend.
+*/
+mesa_err mesa_spur(mesa_engine* eng, const char* agent);
 
 /* remote scry: read [path] (e.g. "/g/x/0/agent//foo") from [her]'s
 **              public namespace; the answer arrives via hooks.sage.

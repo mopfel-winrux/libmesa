@@ -128,7 +128,8 @@ class Hooks(C.Structure):
 
 class Config(C.Structure):
     _fields_ = [("ident", Ident), ("store", C.POINTER(Store)), ("hooks", Hooks),
-                ("our_sponsor", Ship), ("breached", C.c_bool),
+                ("our_sponsor", Ship), ("has_sponsor", C.c_bool),
+                ("breached", C.c_bool),
                 ("no_ping", C.c_bool), ("fake", C.c_bool), ("now", C.c_uint64)]
 
 GALL_NONE, GALL_POKE, GALL_WATCH, GALL_WATCH_AS, GALL_LEAVE, GALL_SYSTEM = range(6)
@@ -567,7 +568,7 @@ class Node:
         self.setup()
 
         # our own point: our sponsor, and a check of our keys
-        sponsor = Ship()
+        sponsor, has_sponsor = Ship(), False
         if not self.fake and lib.mesa_ship_rank(self.our) in (RANK_KING, RANK_DUKE):
             pot = self._resolve(self.our)
             if pot is None:
@@ -579,7 +580,7 @@ class Node:
             if identity.ident.rift == NONE:
                 identity.ident.rift = pot.rift
             if pot.has_sponsor:
-                sponsor = pot.sponsor
+                sponsor, has_sponsor = pot.sponsor, True
         if identity.ident.rift == NONE:
             identity.ident.rift = 0
 
@@ -599,7 +600,7 @@ class Node:
         #  comets and fake ships may always start fresh; anyone else only
         #  if they say they've breached
         cfg = Config(identity.ident, C.pointer(self.store.c), self._hooks, sponsor,
-                     breached or self.fake, False, self.fake, self._now())
+                     has_sponsor, breached or self.fake, False, self.fake, self._now())
         self.eng = E()
         err = lib.mesa_engine_open(C.byref(cfg), C.byref(self.eng))
         if err == -2:

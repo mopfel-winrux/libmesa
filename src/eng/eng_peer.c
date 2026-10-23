@@ -32,6 +32,7 @@ eng_peer_new(mesa_engine* eng, u3_ship who_u)
   per_u->lan_o = c3n;
   per_u->liv_o = c3n;
   per_u->gfo_o = c3n;
+  per_u->gbo_o = c3n;
   per_u->jao_o = c3n;
   per_u->moa_o = c3n;
   per_u->aho_o = c3n;

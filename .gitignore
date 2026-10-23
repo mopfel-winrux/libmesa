@@ -5,3 +5,4 @@ zig-out/
 *.db-*
 *.db.lock
 __pycache__/
+.claude/

@@ -134,7 +134,14 @@ _load_row(void* arg, const uint8_t* key_y, size_t key_z,
                             (eng_dire)key_y[25]);
 
       flo_u->clo_o = _u64(mesa_at(4, val)) ? c3y : c3n;
-      flo_u->hat_o = _u64(mesa_at(10, val)) ? c3y : c3n;
+      {
+        mesa_noun hat = mesa_at(10, val);
+        flo_u->hat_o = ( (MESA_NONE != hat) && mesa_is_atom(hat)
+                       && mesa_met3(hat) ) ? c3y : c3n;
+        if ( (c3y == flo_u->hat_o) && (1 != _u64(hat)) ) {
+          flo_u->hag = mesa_ref(hat);
+        }
+      }
       flo_u->nex_d = _u64(mesa_at(22, val));
       flo_u->win_w = (c3_w)_u64(mesa_at(23, val));
       flo_u->las_d = _u64(mesa_at(6, val));
@@ -167,6 +174,14 @@ _load_row(void* arg, const uint8_t* key_y, size_t key_z,
       end_u = &flo_u->lod_u;
       while ( *end_u ) end_u = &(*end_u)->nex_u;
       *end_u = msg_u;
+    } break;
+
+    case KEY_GALL: {
+      if ( 17 != key_z ) break;
+      _key_ship(key_y, who_u);
+      per_u = eng_peer_make(eng, who_u);
+      per_u->gbo_o = c3y;
+      per_u->gbb_d = _u64(val);
     } break;
 
     case KEY_CORK: {
@@ -491,9 +506,11 @@ mesa_engine_open(const mesa_config* cfg, mesa_engine** out)
     case c3__pawn:
     case c3__earl: u3_ship_sein(eng->spo_u, eng->our_u); break;
     default: {
-      eng->spo_u[0] = cfg->our_sponsor.lo;
-      eng->spo_u[1] = cfg->our_sponsor.hi;
-      if ( !cfg->our_sponsor.lo && !cfg->our_sponsor.hi ) {
+      if ( cfg->has_sponsor ) {
+        eng->spo_u[0] = cfg->our_sponsor.lo;
+        eng->spo_u[1] = cfg->our_sponsor.hi;
+      }
+      else {
         u3_ship_sein(eng->spo_u, eng->our_u);
       }
     }
@@ -946,6 +963,19 @@ mesa_flow_done(mesa_engine* eng, mesa_ship her, uint64_t bone,
 
 /* remote scry
 */
+mesa_err
+mesa_spur(mesa_engine* eng, const char* agent)
+{
+  if ( !agent || !*agent || (strlen(agent) > 64) ) {
+    return MESA_E_ARG;
+  }
+  if ( c3n == _api_open(eng) ) {
+    return MESA_E_FAILED;
+  }
+  eng_sys_spur(eng, agent);
+  return _api_close(eng, MESA_OK);
+}
+
 mesa_err
 mesa_keen(mesa_engine* eng, mesa_ship her, const char* path)
 {

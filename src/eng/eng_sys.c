@@ -5,7 +5,9 @@
 ///
 ///   gall /gf   flub tracking (+mo-track-flubs, +mo-handle-sys-flu): a
 ///              peer whose agent isn't running drops our pleas to it and
-///              tells us to stop (%flub), then to go on (%spur)
+///              tells us to stop (%flub), then to go on (%spur); and the
+///              same from us (+mo-do-flub, +mo-halt, +mo-give-halts), for
+///              requests the application answers with MESA_FLUB
 ///   gall /gk   %shut scry key requests (+mo-handle-key-request): we
 ///              have no encrypted namespace, so we answer [%0 ~]
 ///   jael /public-keys   moon keys from the moon's parent (+sources:feel,
@@ -438,10 +440,15 @@ eng_sys_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
     return c3n;
   }
 
-  //  /gf: they'll tell us about our agents' flubs; we never flub, so
-  //  there's nothing to tell, but a nack makes them ask again and again
+  //  /gf: they want to hear about our flubs; we tell them on this flow
   //
   if ( c3y == _cord_is(mesa_head(pax), "gf") ) {
+    c3_y key_y[40];
+    c3_z key_z = eng_key(KEY_GALL, per_u->who_u, 0, 0, 0, key_y);
+
+    per_u->gbo_o = c3y;
+    per_u->gbb_d = flo_u->bon_d;
+    eng_put(eng, key_y, key_z, mesa_atom_u64(flo_u->bon_d));
     eng_flow_done(eng, per_u, flo_u, MESA_NONE);
     return c3y;
   }
@@ -457,6 +464,98 @@ eng_sys_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
     return c3y;
   }
   return c3n;
+}
+
+/* _gall_boon(): a %boon to [per_u] on their /gf flow, if they have one
+*/
+static void
+_gall_boon(mesa_engine* eng, eng_peer* per_u, mesa_noun res)
+{
+  eng_flow* gfl_u;
+
+  if (  (c3n == per_u->gbo_o)
+     || !(gfl_u = eng_flow_get(per_u, per_u->gbb_d, DIRE_BAK)) )
+  {
+    mesa_unref(res);
+    return;
+  }
+  eng_flow_pump(eng, per_u, gfl_u,
+                mesa_cell(mesa_atom_cord("boon"),
+                          mesa_cell(mesa_atom_u64(0), res)));
+}
+
+/* eng_sys_flub(): +mo-do-flub; the application won't take a gall
+**                 request on [flo_u] now: halt the flow until mesa_spur(),
+**                 and tell them to stop sending. c3n if not a gall request.
+*/
+c3_o
+eng_sys_flub(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
+             mesa_noun van, mesa_noun pax)
+{
+  mesa_noun dap;
+
+  //  [%g /ge/agent ...]
+  //
+  if (  (c3n == _cord_is(van, "g"))
+     || !mesa_is_cell(pax)
+     || (c3n == _cord_is(mesa_head(pax), "ge"))
+     || !mesa_is_cell(mesa_tail(pax))
+     || !mesa_is_atom(dap = mesa_head(mesa_tail(pax)))
+     || !mesa_met3(dap) || (mesa_met3(dap) > 64)
+     || (c3y == eng_sys_bone(per_u, flo_u->bon_d)) )
+  {
+    return c3n;
+  }
+
+  if ( MESA_NONE != flo_u->hag ) {
+    mesa_unref(flo_u->hag);
+  }
+  flo_u->hat_o = c3y;
+  flo_u->hag   = mesa_ref(dap);
+  eng_flow_save(eng, per_u, flo_u);
+
+  //  [%flub agent bone]: the bone they sent it on
+  //
+  _gall_boon(eng, per_u, mesa_trel(mesa_atom_cord("flub"), mesa_ref(dap),
+                                   mesa_atom_u64(flo_u->bon_d)));
+  return c3y;
+}
+
+/* eng_sys_spur(): +mo-give-halts; [dap_c] is back, resume its flows
+*/
+void
+eng_sys_spur(mesa_engine* eng, const c3_c* dap_c)
+{
+  for ( eng_peer_map_itr pit_u = eng_peer_map_first(&eng->per_u);
+        !eng_peer_map_is_end(pit_u);
+        pit_u = eng_peer_map_next(pit_u) )
+  {
+    eng_peer* per_u = pit_u.data->val;
+    c3_o      any_o = c3n;
+
+    for ( eng_flow_map_itr itr_u = eng_flow_map_first(&per_u->flo_u);
+          !eng_flow_map_is_end(itr_u);
+          itr_u = eng_flow_map_next(itr_u) )
+    {
+      eng_flow* flo_u = itr_u.data->val;
+
+      if (  (DIRE_BAK == flo_u->dir_e) && (MESA_NONE != flo_u->hag)
+         && (c3y == _cord_is(flo_u->hag, dap_c)) )
+      {
+        mesa_unref(flo_u->hag);
+        flo_u->hag = MESA_NONE;
+        eng_flow_unhalt(eng, per_u, flo_u);
+        any_o = c3y;
+      }
+    }
+
+    //  [%spur agent]: they resend what we flubbed
+    //
+    if ( c3y == any_o ) {
+      _gall_boon(eng, per_u, mesa_cell(mesa_atom_cord("spur"),
+                                       mesa_atom_cord(dap_c)));
+    }
+  }
 }
 
 /* eng_sys_boon(): a boon on one of our system flows
@@ -512,8 +611,13 @@ eng_sys_breach(mesa_engine* eng, eng_peer* per_u)
   if ( c3y == per_u->jao_o ) {
     _unask(eng, per_u);
   }
+  if ( c3y == per_u->gbo_o ) {
+    c3_y key_y[40];
+    eng_del(eng, key_y, eng_key(KEY_GALL, per_u->who_u, 0, 0, 0, key_y));
+  }
   per_u->gfo_o = c3n;
   per_u->jao_o = c3n;
+  per_u->gbo_o = c3n;
 }
 
 /* points

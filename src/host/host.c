@@ -551,6 +551,7 @@ mesa_host_open(const mesa_host_config* cfg, mesa_host** out)
     }
     if ( pot_u.has_sponsor ) {
       con_u.our_sponsor = pot_u.sponsor;
+      con_u.has_sponsor = true;
     }
   }
 

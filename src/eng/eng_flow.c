@@ -54,6 +54,7 @@ eng_flow_make(mesa_engine* eng, eng_peer* per_u, c3_d bon_d, eng_dire dir_e)
   flo_u->dir_e = dir_e;
   flo_u->clo_o = c3n;
   flo_u->hat_o = c3n;
+  flo_u->hag   = MESA_NONE;
   flo_u->nex_d = 1;
   flo_u->win_w = 1;
   flo_u->pen_o = c3n;
@@ -78,6 +79,9 @@ eng_flow_free(eng_flow* flo_u)
   for ( c3_w i = 0; i < flo_u->nan_w; i++ ) {
     mesa_unref(flo_u->nax_u[i].err);
   }
+  if ( MESA_NONE != flo_u->hag ) {
+    mesa_unref(flo_u->hag);
+  }
   c3_free(flo_u);
 }
 
@@ -91,6 +95,8 @@ eng_flow_corked(eng_peer* per_u, c3_d bon_d, eng_dire dir_e)
 /* eng_flow_save(): persist a flow's header
 **
 **   [closing halt next window last-acked pending nax]
+**
+**   [halt] is a loobean, or for a backward flow we flubbed, the agent.
 */
 void
 eng_flow_save(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u)
@@ -108,7 +114,9 @@ eng_flow_save(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u)
 
   eng_put(eng, key_y, key_z,
           mesa_cell(mesa_qual(mesa_atom_u64(c3y == flo_u->clo_o),
-                              mesa_atom_u64(c3y == flo_u->hat_o),
+                              ( MESA_NONE != flo_u->hag )
+                              ? mesa_ref(flo_u->hag)
+                              : mesa_atom_u64(c3y == flo_u->hat_o),
                               mesa_atom_u64(flo_u->nex_d),
                               mesa_atom_u64(flo_u->win_w)),
                     mesa_trel(mesa_atom_u64(flo_u->las_d),
@@ -584,7 +592,8 @@ _sink_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u, mesa_noun pag)
         eng_flow_save(eng, per_u, flo_u);
       } break;
 
-      case MESA_DROP: {
+      case MESA_DROP:
+      case MESA_FLUB: {
         //  no answer: undo the handler (with savepoints; without, it
         //  mustn't have written), and take the resend when it comes
         //
@@ -598,6 +607,13 @@ _sink_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u, mesa_noun pag)
           }
         }
         flo_u->pen_o = c3n;
+
+        //  flub: halt the flow and tell them to stop sending, until
+        //  mesa_spur(); a drop if it isn't a gall request
+        //
+        if ( MESA_FLUB == res_e ) {
+          eng_sys_flub(eng, per_u, flo_u, van, pax);
+        }
       } break;
 
       default: {

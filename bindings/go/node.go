@@ -281,6 +281,7 @@ func Open(cfg Config) (*Node, error) {
 	//  our own point: our keys must match, and it names our sponsor
 	ide := n.id.c
 	var sponsor Ship
+	hasSponsor := false
 	if r := n.our.Rank(); !n.fake && r <= Planet {
 		pot, err := FetchPoint(n.http, n.az, n.our)
 		if err != nil {
@@ -298,7 +299,7 @@ func Open(cfg Config) (*Node, error) {
 			ide.rift = C.uint64_t(pot.Rift)
 		}
 		if pot.HasSponsor {
-			sponsor = pot.Sponsor
+			sponsor, hasSponsor = pot.Sponsor, true
 		}
 	}
 
@@ -310,6 +311,7 @@ func Open(cfg Config) (*Node, error) {
 	con.store = n.store.c
 	C.mesa_go_hooks(&con.hooks, C.uintptr_t(n.h))
 	con.our_sponsor = sponsor.c()
+	con.has_sponsor = C.bool(hasSponsor)
 	con.breached = C.bool(cfg.Breached || n.fake)
 	con.no_ping = C.bool(cfg.NoPing)
 	con.fake = C.bool(n.fake)

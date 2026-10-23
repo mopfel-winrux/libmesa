@@ -13,6 +13,8 @@
 /// Serving: a ship's gall pokes or watches "our agents" with the same
 /// pleas; decode them in hooks.plea with mesa_gall_request_parse(), and send
 /// facts and kicks on that bone with mesa_gall_fact()/mesa_gall_kick().
+/// For a request to an agent you don't run, return MESA_FLUB: the sender
+/// stops resending on that flow until mesa_spur() says the agent is back.
 
 #ifndef MESA_GALL_H
 #define MESA_GALL_H
