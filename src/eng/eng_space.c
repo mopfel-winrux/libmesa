@@ -4,7 +4,8 @@
 /// authentication (+authenticate) / decryption (+decrypt-spac).
 ///
 /// Namespace paths are kept without their leading '/', as packet names
-/// carry them: "chum/1/~zod/1/0v1.abcde..." or "publ/1/g/x/...".
+/// carry them: "chum/1/~zod/1/0v1.abcde...", "shut/1/0v1.abcde..." or
+/// "publ/1/g/x/...".
 
 #include "eng.h"
 
@@ -128,6 +129,134 @@ eng_open_chum(mesa_engine* eng, eng_peer* per_u, const c3_c* pat_c)
   return inn_c;
 }
 
+/* eng_shut_path(): /shut/<kid>/<sealed inner path>, a group-encrypted
+**                  read (+make-space-path %shut)
+*/
+c3_c*
+eng_shut_path(c3_d kid_d, const c3_y key_y[32], const c3_c* inn_c)
+{
+  c3_y  sel_y[16 + 1 + 1024];
+  c3_z  sel_z;
+  c3_c  kid_c[32];
+  c3_c* cyf_c;
+  c3_c* out_c;
+  c3_z  len_z;
+
+  if ( strlen(inn_c) > 1024 ) {
+    return 0;
+  }
+  sel_z = mesa_seal_path(key_y, inn_c, sel_y);
+  cyf_c = knot_uv(sel_z, sel_y);
+  knot_ud(kid_d, kid_c);
+
+  len_z = strlen(kid_c) + strlen(cyf_c) + 8;
+  out_c = c3_malloc(len_z);
+  snprintf(out_c, len_z, "shut/%s/%s", kid_c, cyf_c);
+  c3_free(cyf_c);
+  return out_c;
+}
+
+/* eng_shut_parse(): a shut path's key id and sealed path atom
+*/
+c3_y*
+eng_shut_parse(const c3_c* pat_c, c3_d* kid_d, c3_z* cyf_z)
+{
+  knot_path pax_u;
+
+  if (  (c3n == knot_path_split(strlen(pat_c), pat_c, &pax_u))
+     || (3 != pax_u.len_w)
+     || (c3n == knot_seg_is(&pax_u.seg_u[0], "shut"))
+     || (c3n == knot_ud_parse(pax_u.seg_u[1].len_z, pax_u.seg_u[1].str_c, kid_d)) )
+  {
+    return 0;
+  }
+  return knot_uv_parse(pax_u.seg_u[2].len_z, pax_u.seg_u[2].str_c, cyf_z);
+}
+
+/* eng_open_shut(): +decrypt-spac for %shut, with the group key
+*/
+c3_y*
+eng_open_shut(const c3_y key_y[32], const c3_c* pat_c,
+              c3_z len_z, const c3_y* dat_y, c3_z* out_z)
+{
+  c3_d  kid_d;
+  c3_z  cyf_z;
+  c3_y* cyf_y = eng_shut_parse(pat_c, &kid_d, &cyf_z);
+  c3_y* out_y;
+  c3_ds res_ds;
+
+  if ( !cyf_y ) {
+    return 0;
+  }
+  out_y  = c3_malloc(c3_max(len_z, 1));
+  res_ds = mesa_decrypt(key_y, cyf_z, cyf_y, len_z, dat_y, out_y);
+  c3_free(cyf_y);
+  if ( res_ds < 0 ) {
+    c3_free(out_y);
+    return 0;
+  }
+  *out_z = (c3_z)res_ds;
+  return out_y;
+}
+
+eng_shut*
+eng_shut_get(mesa_engine* eng, c3_d kid_d)
+{
+  for ( eng_shut* shu_u = eng->shu_u; shu_u; shu_u = shu_u->nex_u ) {
+    if ( kid_d == shu_u->kid_d ) return shu_u;
+  }
+  return 0;
+}
+
+/* eng_shut_under(): is [inn_c] at or under [pre_c], segment by segment,
+**                   not comparing the case (the third segment)?
+*/
+c3_o
+eng_shut_under(const c3_c* pre_c, const c3_c* inn_c)
+{
+  knot_path pre_u, inn_u;
+
+  if (  (c3n == knot_path_split(strlen(pre_c), pre_c, &pre_u))
+     || (c3n == knot_path_split(strlen(inn_c), inn_c, &inn_u))
+     || (pre_u.len_w > inn_u.len_w) )
+  {
+    return c3n;
+  }
+  for ( c3_w i = 0; i < pre_u.len_w; i++ ) {
+    if ( 2 == i ) continue;
+    if (  (pre_u.seg_u[i].len_z != inn_u.seg_u[i].len_z)
+       || memcmp(pre_u.seg_u[i].str_c, inn_u.seg_u[i].str_c,
+                 pre_u.seg_u[i].len_z) )
+    {
+      return c3n;
+    }
+  }
+  return c3y;
+}
+
+/* eng_shut_covered(): does any of our keys cover [inn_c]? Then it's
+**                     never served in the clear.
+*/
+c3_o
+eng_shut_covered(mesa_engine* eng, const c3_c* inn_c)
+{
+  for ( eng_shut* shu_u = eng->shu_u; shu_u; shu_u = shu_u->nex_u ) {
+    if ( c3y == eng_shut_under(shu_u->pre_c, inn_c) ) return c3y;
+  }
+  return c3n;
+}
+
+void
+eng_shut_free(mesa_engine* eng)
+{
+  while ( eng->shu_u ) {
+    eng_shut* nex_u = eng->shu_u->nex_u;
+    c3_free(eng->shu_u->pre_c);
+    c3_free(eng->shu_u);
+    eng->shu_u = nex_u;
+  }
+}
+
 /* eng_auth_page(): +authenticate a page [per_u] bound at [pat_c]
 */
 c3_o
@@ -154,6 +283,16 @@ eng_auth_page(mesa_engine* eng, eng_peer* per_u, const c3_c* pat_c,
        && (lyf_d == per_u->lyf_d) )
     {
       ret_o = mesa_verify_binding(per_u->sgn_y, aut_u->sig_y, ful_c, roo_y);
+    }
+  }
+  else if ( (0 == strncmp(pat_c, "shut/", 5)) && (AUTH_SIGN == aut_u->typ_e) ) {
+    c3_d  kid_d;
+    c3_z  cyf_z;
+    c3_y* cyf_y = eng_shut_parse(pat_c, &kid_d, &cyf_z);
+
+    if ( cyf_y ) {
+      ret_o = mesa_verify_binding(per_u->sgn_y, aut_u->sig_y, ful_c, roo_y);
+      c3_free(cyf_y);
     }
   }
   else if ( (0 == strncmp(pat_c, "chum/", 5)) && (AUTH_HMAC == aut_u->typ_e) ) {

@@ -73,4 +73,15 @@ mesa_err mesa_gall_fact(mesa_engine* eng, mesa_ship her, uint64_t bone,
                         const char* mark, mesa_noun noun);
 mesa_err mesa_gall_kick(mesa_engine* eng, mesa_ship her, uint64_t bone);
 
+/* %shut keys: ask [her]'s gall for the key to a %shut path of theirs,
+**             e.g. "/g/x/0/agent//1/secret/foo" (on a flow of ours,
+**             [bone]); its answer arrives as a boon there. On success,
+**             mesa_gall_key_parse() gives the kid and key to pass to
+**             mesa_keen_shut() with the same path. Arvo's own gall does
+**             the same before a %keen of a %shut path.
+*/
+mesa_err mesa_gall_key(mesa_engine* eng, mesa_ship her, uint64_t bone,
+                       const char* path);
+bool     mesa_gall_key_parse(mesa_noun boon, uint64_t* kid, uint8_t key[32]);
+
 #endif /* ifndef MESA_GALL_H */

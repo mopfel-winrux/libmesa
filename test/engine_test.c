@@ -5,6 +5,7 @@
 
 #include "eng.h"
 #include "mesa/engine.h"
+#include "mesa/gall.h"
 #include "mesa/ident.h"
 
 static c3_i ret_i = 0;
@@ -181,6 +182,8 @@ typedef struct _node {
   c3_w         nak_w;    //  nack the next n pleas
   c3_w         dro_w;    //  drop the next n pleas
   c3_w         flu_w;    //  flub the next n pleas
+  c3_d         kid_d;    //  the %shut key we give out (0: none)
+  mesa_ship    kif_u;    //    to whom
   c3_o         bon_o;    //  answer each plea with a boon
   c3_o         lat_o;    //  answer pleas later
   c3_w         drp_w;    //  drop rate, percent
@@ -374,9 +377,32 @@ _h_sage(void* ctx, mesa_ship her, const char* path, mesa_noun gage)
   _record(ctx, "sage", her, 0, gage);
 }
 
+static uint64_t
+_h_shut_key(void* ctx, mesa_ship her, const char* agent, const char* spur)
+{
+  _node* nod = ctx;
+  _record(nod, "shut-key", her, 0, MESA_NONE);
+  if (  nod->kid_d && mesa_ship_eq(her, nod->kif_u)
+     && !strcmp(agent, "test") && !strncmp(spur, "/secret", 7) )
+  {
+    return nod->kid_d;
+  }
+  return 0;
+}
+
 static mesa_noun
 _h_peek(void* ctx, const mesa_ship* her, const char* path)
 {
+  if ( !strncmp(path, "/g/x/", 5) && strstr(path, "/test//1/secret/hi") ) {
+    return mesa_cell(mesa_atom_cord("noun"), mesa_atom_cord("psst"));
+  }
+  if ( !strncmp(path, "/g/x/", 5) && strstr(path, "/test//1/secret/big") ) {
+    c3_y* buf_y = c3_malloc(20000);
+    for ( c3_w i = 0; i < 20000; i++ ) buf_y[i] = (c3_y)(i * 17 + 3);
+    mesa_noun big = mesa_atom_bytes(20000, buf_y);
+    c3_free(buf_y);
+    return mesa_cell(mesa_atom_cord("noun"), big);
+  }
   if ( 0 == strcmp(path, "/g/x/0/test//hello") ) {
     return mesa_cell(mesa_atom_cord("noun"), mesa_atom_cord("world"));
   }
@@ -403,7 +429,7 @@ _node_open(_node* nod, c3_o fre_o)
   cfg.hooks    = (mesa_hooks){
     .ctx = nod, .send = _h_send, .need_point = _h_need, .plea = _h_plea,
     .boon = _h_boon, .done = _h_done, .corked = _h_corked, .sage = _h_sage,
-    .peek = _h_peek, .breach = _h_breach,
+    .peek = _h_peek, .breach = _h_breach, .shut_key = _h_shut_key,
   };
   return mesa_engine_open(&cfg, &nod->eng);
 }
@@ -726,6 +752,105 @@ _test_keen(_node* zod, _node* nec)
       expect(20000 == mesa_met3(mesa_tail(gag)), "big sage size");
     }
   }
+  _clear(zod); _clear(nec);
+}
+
+static void _restart(_node* nod);
+
+/* %shut: a group key, given over /gk, reads what it covers; nothing
+** else does
+*/
+static void
+_test_shut(_node* zod, _node* nec)
+{
+  c3_y      key_y[32];
+  c3_y      kez_y[32];
+  c3_d      kid_d = 0, kiz_d = 0, bon_d;
+  mesa_noun psst = mesa_cell(mesa_atom_cord("noun"), mesa_atom_cord("psst"));
+
+  for ( c3_w i = 0; i < 32; i++ ) key_y[i] = (c3_y)(i * 7 + 1);
+  expect(MESA_E_ARG == mesa_shut_add(nec->eng, "/a/x/1//flow", key_y, &kid_d),
+         "no keys for ames");
+  expect(MESA_OK == mesa_shut_add(nec->eng, "/g/x/0/test//1/secret", key_y,
+                                  &kid_d), "shut add");
+  expect(1 == kid_d, "first kid is 1: %" PRIu64, kid_d);
+
+  //  covered paths are never public
+  //
+  mesa_keen(zod->eng, nec->who, "/g/x/0/test//1/secret/hi");
+  _run(30000);
+  expect(0 == _count(zod, "sage"), "not in the clear");
+  mesa_yawn(zod->eng, nec->who, "/g/x/0/test//1/secret/hi");
+
+  //  ask for the key; refused, then given
+  //
+  mesa_flow_open(zod->eng, nec->who, &bon_d);
+  mesa_gall_key(zod->eng, nec->who, bon_d, "/g/x/3/test//1/secret/hi");
+  _run(30000);
+  expect(1 == _count(nec, "shut-key"), "asked the app: %u",
+         _count(nec, "shut-key"));
+  expect(1 == _count(zod, "boon"), "an answer: %u", _count(zod, "boon"));
+  if ( _count(zod, "boon") ) {
+    expect(!mesa_gall_key_parse(_nth(zod, "boon", 0)->som, &kiz_d, kez_y),
+           "refused");
+  }
+  _clear(zod); _clear(nec);
+
+  nec->kid_d = kid_d;
+  nec->kif_u = zod->who;
+  mesa_gall_key(zod->eng, nec->who, bon_d, "/g/x/3/test//1/secret/hi");
+  _run(30000);
+  expect(1 == _count(zod, "boon"), "an answer: %u", _count(zod, "boon"));
+  expect(1 == _count(zod, "done"), "acked: %u", _count(zod, "done"));
+  if ( _count(zod, "boon") ) {
+    expect(mesa_gall_key_parse(_nth(zod, "boon", 0)->som, &kiz_d, kez_y),
+           "a key");
+    expect(kiz_d == kid_d && !memcmp(kez_y, key_y, 32), "the key");
+  }
+  _clear(zod); _clear(nec);
+
+  //  read with it, small and large, at any case
+  //
+  mesa_keen_shut(zod->eng, nec->who, kiz_d, kez_y, "/g/x/3/test//1/secret/hi");
+  mesa_keen_shut(zod->eng, nec->who, kiz_d, kez_y, "/g/x/4/test//1/secret/big");
+  _run(60000);
+  expect(2 == _count(zod, "sage"), "shut sages: %u", _count(zod, "sage"));
+  for ( c3_w i = 0; i < _count(zod, "sage"); i++ ) {
+    _rcv* rcv_u = _nth(zod, "sage", i);
+    if ( MESA_NONE == rcv_u->som ) {
+      expect(0, "shut sage %u empty", i);
+    }
+    else if ( 20000 == mesa_met3(mesa_tail(rcv_u->som)) ) {
+      expect(1, "big");
+    }
+    else {
+      expect(mesa_eq(rcv_u->som, psst), "small shut sage");
+    }
+  }
+  _clear(zod); _clear(nec);
+
+  //  a wrong key, or a path the key doesn't cover: no answer
+  //
+  kez_y[0] ^= 1;
+  mesa_keen_shut(zod->eng, nec->who, kiz_d, kez_y, "/g/x/5/test//1/secret/hi");
+  mesa_keen_shut(zod->eng, nec->who, kiz_d, key_y, "/g/x/5/test//hello");
+  _run(30000);
+  expect(0 == _count(zod, "sage"), "wrong key or path: %u",
+         _count(zod, "sage"));
+  mesa_yawn(zod->eng, nec->who, "/g/x/5/test//1/secret/hi");
+  mesa_yawn(zod->eng, nec->who, "/g/x/5/test//hello");
+
+  //  keys survive a restart; the next kid follows
+  //
+  _restart(nec);
+  mesa_keen_shut(zod->eng, nec->who, kid_d, key_y, "/g/x/6/test//1/secret/hi");
+  _run(30000);
+  expect(1 == _count(zod, "sage"), "after restart: %u", _count(zod, "sage"));
+  expect(MESA_OK == mesa_shut_add(nec->eng, "/g/x/0/test//1/other", key_y,
+                                  &kiz_d) && (2 == kiz_d), "next kid");
+
+  nec->kid_d = 0;
+  mesa_unref(psst);
   _clear(zod); _clear(nec);
 }
 
@@ -1218,6 +1343,7 @@ main(int argc, char* argv[])
   _test_boon(zod, nec);
   _test_big(zod, nec);
   _test_keen(zod, nec);
+  _test_shut(zod, nec);
   _test_cork(zod, nec);
   _test_later(zod, nec);
   _test_drop(zod, nec);

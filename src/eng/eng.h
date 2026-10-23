@@ -106,6 +106,9 @@ typedef struct _eng_req {
   c3_d              seq_d;
   c3_c*             pay_c;   //  REQ_ACK: our payload path (poke packet)
   c3_c*             key_c;   //  REQ_KEEN: the path the app asked for
+  c3_o              shu_o;   //  REQ_KEEN: a %shut read, with this key
+  c3_d              kid_d;
+  c3_y              shk_y[32];
   //  retry
   c3_d              nex_d;   //  next (re)send, ms
   c3_d              rto_d;
@@ -200,6 +203,15 @@ typedef struct _eng_line {
   struct _eng_line* nex_u;   //  eviction order
 } eng_line;
 
+/* shut key: one of our group keys for a %shut namespace (+sy-plug)
+*/
+typedef struct _eng_shut {
+  c3_d              kid_d;
+  c3_y              key_y[32];
+  c3_c*             pre_c;   //  the paths it covers (case not compared)
+  struct _eng_shut* nex_u;
+} eng_shut;
+
 /* responder pit: lanes waiting for a page of ours (vere's pit)
 */
 typedef struct _eng_wait {
@@ -238,6 +250,7 @@ struct mesa_engine {
   eng_line*     lin_u;       //  served-message cache, oldest first
   c3_d          lis_d;       //  cache bytes
   eng_wait*     wat_u;
+  eng_shut*     shu_u;       //  our %shut keys, by kid ascending
   //  ping
   c3_o          pin_o;
   c3_d          pin_d;       //  next ping, ms
@@ -306,6 +319,14 @@ c3_o      eng_auth_page(mesa_engine* eng, eng_peer* per_u, const c3_c* pat_c,
 c3_y*     eng_open_page(mesa_engine* eng, eng_peer* per_u, const c3_c* pat_c,
                         c3_z len_z, const c3_y* dat_y, c3_z* out_z);
 c3_c*     eng_open_chum(mesa_engine* eng, eng_peer* per_u, const c3_c* pat_c);
+c3_c*     eng_shut_path(c3_d kid_d, const c3_y key_y[32], const c3_c* inn_c);
+c3_y*     eng_open_shut(const c3_y key_y[32], const c3_c* pat_c,
+                        c3_z len_z, const c3_y* dat_y, c3_z* out_z);
+c3_y*     eng_shut_parse(const c3_c* pat_c, c3_d* kid_d, c3_z* cyf_z);
+eng_shut* eng_shut_get(mesa_engine* eng, c3_d kid_d);
+c3_o      eng_shut_under(const c3_c* pre_c, const c3_c* inn_c);
+c3_o      eng_shut_covered(mesa_engine* eng, const c3_c* inn_c);
+void      eng_shut_free(mesa_engine* eng);
 
 /* eng_serve.c
 */
@@ -329,7 +350,7 @@ void      eng_req_send(mesa_engine* eng, eng_peer* per_u, eng_req* req_u);
 void      eng_hear_page(mesa_engine* eng, mesa_lane lan_u, u3_mesa_pact* pac_u);
 void      eng_req_wake(mesa_engine* eng, eng_peer* per_u);
 void      eng_req_rebase(mesa_engine* eng, eng_peer* per_u);
-c3_c*     eng_keen_path(eng_peer* per_u, const c3_c* key_c);
+c3_c*     eng_keen_path(eng_peer* per_u, eng_req* req_u);
 c3_d      eng_req_deadline(eng_peer* per_u);
 
 /* eng_flow.c
@@ -370,7 +391,7 @@ c3_o      eng_sys_bone(eng_peer* per_u, c3_d bon_d);
 void      eng_sys_track(mesa_engine* eng, eng_peer* per_u, mesa_noun msg);
 c3_o      eng_sys_moon(mesa_engine* eng, eng_peer* per_u);
 c3_o      eng_sys_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
-                       mesa_noun van, mesa_noun pax);
+                       mesa_noun van, mesa_noun pax, mesa_noun pay);
 c3_o      eng_sys_boon(mesa_engine* eng, eng_peer* per_u, c3_d bon_d,
                        mesa_noun pay);
 c3_o      eng_sys_done(mesa_engine* eng, eng_peer* per_u, c3_d bon_d,
@@ -389,6 +410,7 @@ void      eng_point_apply(mesa_engine* eng, const mesa_point* pot);
 #define KEY_LOAD  'L'
 #define KEY_CORK  'C'
 #define KEY_GALL  'G'    //  their /gf bone, for telling them our flubs
+#define KEY_SHUT  'S'    //  a %shut key of ours: 'S' kid(8) -> [key prefix]
 
 c3_z eng_key(c3_y typ_y, u3_ship who_u, c3_d bon_d, eng_dire dir_e,
              c3_d seq_d, c3_y key_y[40]);

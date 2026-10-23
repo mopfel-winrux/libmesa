@@ -124,6 +124,8 @@ class Hooks(C.Structure):
         ("sage", C.CFUNCTYPE(None, C.c_void_p, Ship, C.c_char_p, noun_t)),
         ("peek", C.CFUNCTYPE(noun_t, C.c_void_p, C.POINTER(Ship), C.c_char_p)),
         ("breach", C.CFUNCTYPE(None, C.c_void_p, Ship)),
+        ("shut_key", C.CFUNCTYPE(C.c_uint64, C.c_void_p, Ship, C.c_char_p,
+                                 C.c_char_p)),
     ]
 
 class Config(C.Structure):

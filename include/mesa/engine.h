@@ -117,10 +117,12 @@ typedef struct mesa_hooks {
 
   /* peek(): serve our namespace. [path] is the inner path, e.g.
   **         "/g/x/0/my-agent//some/path". [her] is the reader for
-  **         encrypted (two-party) reads, NULL for public ones. Return a
-  **         [mark noun] cell, or MESA_NONE if there's nothing there.
-  **         Bindings must be immutable: once a path has a value, it must
-  **         always have the same value.
+  **         encrypted (two-party) reads, NULL for public ones and for
+  **         %shut reads (anyone holding the key: see mesa_shut_add()).
+  **         Return a [mark noun] cell, or MESA_NONE if there's nothing
+  **         there. Bindings must be immutable: once a path has a value,
+  **         it must always have the same value. Paths a %shut key covers
+  **         are only ever served encrypted under it.
   */
   mesa_noun (*peek)(void* ctx, const mesa_ship* her, const char* path);
 
@@ -128,6 +130,15 @@ typedef struct mesa_hooks {
   **           gone, and so is any unacked message.
   */
   void (*breach)(void* ctx, mesa_ship her);
+
+  /* shut_key(): [her]'s gall asks for the key to [agent]'s %shut paths
+  **             at [spur] (e.g. "/secret/foo", after "//1"), as Arvo's
+  **             gall asks with /gk. Return the kid (from mesa_shut_add())
+  **             to give them, or 0 to refuse. Without this hook, every
+  **             request is refused.
+  */
+  uint64_t (*shut_key)(void* ctx, mesa_ship her, const char* agent,
+                       const char* spur);
 } mesa_hooks;
 
 typedef struct mesa_config {
@@ -257,10 +268,28 @@ mesa_err mesa_spur(mesa_engine* eng, const char* agent);
 
 /* remote scry: read [path] (e.g. "/g/x/0/agent//foo") from [her]'s
 **              public namespace; the answer arrives via hooks.sage.
-**              mesa_yawn() stops asking (no sage follows). Outstanding
-**              reads live in memory only: ask again after a restart.
+**              mesa_keen_shut() reads a %shut (group-encrypted) path
+**              with key [kid] (from mesa_gall_key_parse(), or given to
+**              you some other way). mesa_yawn() stops asking (no sage
+**              follows).
+**
+**   Outstanding reads live in memory only: after a restart (or after
+**   MESA_E_FAILED and a reopen) no sage will come for them, so ask
+**   again. Keep what you asked for in your own state if you need it.
 */
 mesa_err mesa_keen(mesa_engine* eng, mesa_ship her, const char* path);
+mesa_err mesa_keen_shut(mesa_engine* eng, mesa_ship her, uint64_t kid,
+                        const uint8_t key[32], const char* path);
 mesa_err mesa_yawn(mesa_engine* eng, mesa_ship her, const char* path);
+
+/* %shut namespace: serve the paths under [prefix] (e.g.
+**                  "/g/x/0/my-agent//1/secret"; the case, the third
+**                  segment, isn't compared) encrypted with [key], 32
+**                  random bytes, to anyone who has it. *kid names the
+**                  key; give [kid] and [key] to readers yourself, or
+**                  through hooks.shut_key. Keys persist in the store.
+*/
+mesa_err mesa_shut_add(mesa_engine* eng, const char* prefix,
+                       const uint8_t key[32], uint64_t* kid);
 
 #endif /* ifndef MESA_ENGINE_H */

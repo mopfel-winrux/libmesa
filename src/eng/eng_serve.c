@@ -295,6 +295,7 @@ _line_make(mesa_engine* eng, const c3_c* pat_c)
   eng_peer* per_u = 0;
   c3_y      cyf_y[16 + 1 + 1024];
   c3_z      cyf_z = 0;
+  const c3_y* enk_y = 0;     //  encryption key: chum's or a shut key
 
   if ( c3n == knot_path_split(strlen(pat_c), pat_c, &pax_u) || !pax_u.len_w ) {
     return 0;
@@ -319,7 +320,37 @@ _line_make(mesa_engine* eng, const c3_c* pat_c)
     else if ( 0 == strncmp(inn_c, "/a/", 3) ) {
       gag = MESA_NONE;   //  our own vane's state is never public
     }
+    else if ( c3y == eng_shut_covered(eng, inn_c) ) {
+      gag = MESA_NONE;   //  only with the key
+    }
     else if ( eng->hok_u.peek ) {
+      gag = eng->hok_u.peek(eng->hok_u.ctx, 0, inn_c);
+    }
+  }
+  else if ( c3y == knot_seg_is(&pax_u.seg_u[0], "shut") ) {
+    //  +peek-shut: anyone with the key may read what it covers
+    //
+    c3_d      kid_d;
+    c3_y*     buf_y = eng_shut_parse(pat_c, &kid_d, &cyf_z);
+    eng_shut* shu_u = buf_y ? eng_shut_get(eng, kid_d) : 0;
+
+    if ( !shu_u || (cyf_z > sizeof(cyf_y)) ) {
+      c3_free(buf_y);
+      return 0;
+    }
+    memcpy(cyf_y, buf_y, cyf_z);
+    c3_free(buf_y);
+
+    inn_c = c3_malloc(cyf_z + 1);
+    if (  (0 > mesa_open_path(shu_u->key_y, cyf_z, cyf_y, inn_c, cyf_z + 1))
+       || (0 == strncmp(inn_c, "/a/", 3))
+       || (c3n == eng_shut_under(shu_u->pre_c, inn_c)) )
+    {
+      c3_free(inn_c);
+      return 0;
+    }
+    enk_y = shu_u->key_y;
+    if ( eng->hok_u.peek ) {
       gag = eng->hok_u.peek(eng->hok_u.ctx, 0, inn_c);
     }
   }
@@ -349,6 +380,7 @@ _line_make(mesa_engine* eng, const c3_c* pat_c)
       memcpy(cyf_y, buf_y, cyf_z);
       c3_free(buf_y);
     }
+    enk_y = per_u->sym_y;
 
     if ( 0 == strncmp(inn_c, "/a/x/1//flow/", 13) ) {
       gag = _flow_page(eng, per_u, inn_c);
@@ -378,11 +410,11 @@ _line_make(mesa_engine* eng, const c3_c* pat_c)
   ser_y = mesa_jam_bytes(gag, &ser_z);
   mesa_unref(gag);
 
-  if ( per_u ) {
+  if ( enk_y ) {
     //  +encrypt:crypt with the sealed path as IV
     //
     c3_y* cyr_y = c3_malloc(ser_z + 1);
-    c3_z  cyr_z = mesa_encrypt(per_u->sym_y, cyf_z, cyf_y, ser_z, ser_y, cyr_y);
+    c3_z  cyr_z = mesa_encrypt(enk_y, cyf_z, cyf_y, ser_z, ser_y, cyr_y);
     c3_free(ser_y);
     ser_y = cyr_y;
     ser_z = cyr_z;
@@ -390,7 +422,7 @@ _line_make(mesa_engine* eng, const c3_c* pat_c)
 
   lin_u = _line_build(strdup(pat_c), ser_z, ser_y);
 
-  //  authenticate the root: +sign (publ) or +mac (chum)
+  //  authenticate the root: +sign (publ, shut) or +mac (chum)
   //
   {
     c3_y  roo_y[32];

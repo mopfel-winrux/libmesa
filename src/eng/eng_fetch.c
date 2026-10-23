@@ -29,6 +29,7 @@ eng_req_add(mesa_engine* eng, eng_peer* per_u, const c3_c* pat_c,
   req_u->nex_d = eng->now_d;
   req_u->rto_d = ENG_RTO_MIN;
   req_u->aut_o = c3n;
+  req_u->shu_o = c3n;
 
   while ( *end_u ) end_u = &(*end_u)->nex_u;
   *end_u = req_u;
@@ -55,6 +56,7 @@ eng_req_free(eng_req* req_u)
   c3_free(req_u->pat_c);
   c3_free(req_u->pay_c);
   c3_free(req_u->key_c);
+  memset(req_u->shk_y, 0, sizeof(req_u->shk_y));
   _fetch_free(req_u->fet_u);
   c3_free(req_u);
 }
@@ -306,7 +308,9 @@ _req_done(mesa_engine* eng, eng_peer* per_u, eng_req* req_u,
           c3_z len_z, const c3_y* ser_y)
 {
   c3_z      pla_z;
-  c3_y*     pla_y = eng_open_page(eng, per_u, req_u->pat_c, len_z, ser_y, &pla_z);
+  c3_y*     pla_y = ( c3y == req_u->shu_o )
+                    ? eng_open_shut(req_u->shk_y, req_u->pat_c, len_z, ser_y, &pla_z)
+                    : eng_open_page(eng, per_u, req_u->pat_c, len_z, ser_y, &pla_z);
   mesa_noun gag;
 
   eng_req_del(per_u, req_u);
@@ -562,12 +566,16 @@ eng_hear_page(mesa_engine* eng, mesa_lane lan_u, u3_mesa_pact* pac_u)
   }
 }
 
-/* eng_keen_path(): the namespace path for a remote scry of [key_c]
+/* eng_keen_path(): the namespace path for a remote scry: public, or
+**                  %shut with the request's key
 */
 c3_c*
-eng_keen_path(eng_peer* per_u, const c3_c* key_c)
+eng_keen_path(eng_peer* per_u, eng_req* req_u)
 {
-  return eng_publ_path(per_u->lyf_d, key_c);
+  if ( c3y == req_u->shu_o ) {
+    return eng_shut_path(req_u->kid_d, req_u->shk_y, req_u->key_c);
+  }
+  return eng_publ_path(per_u->lyf_d, req_u->key_c);
 }
 
 /* eng_req_rebase(): [per_u]'s keys changed; paths that name their life
@@ -584,7 +592,7 @@ eng_req_rebase(mesa_engine* eng, eng_peer* per_u)
     switch ( req_u->typ_e ) {
       case REQ_KEEN: {
         c3_free(req_u->pat_c);
-        req_u->pat_c = eng_keen_path(per_u, req_u->key_c);
+        req_u->pat_c = eng_keen_path(per_u, req_u);
         _fetch_free(req_u->fet_u);
         req_u->fet_u = 0;
         req_u->aut_o = c3n;

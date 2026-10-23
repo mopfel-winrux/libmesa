@@ -8,8 +8,9 @@
 ///              tells us to stop (%flub), then to go on (%spur); and the
 ///              same from us (+mo-do-flub, +mo-halt, +mo-give-halts), for
 ///              requests the application answers with MESA_FLUB
-///   gall /gk   %shut scry key requests (+mo-handle-key-request): we
-///              have no encrypted namespace, so we answer [%0 ~]
+///   gall /gk   %shut scry key requests (+mo-handle-key-request): the
+///              application's hooks.shut_key decides, and we answer
+///              [%0 (unit brood)]
 ///   jael /public-keys   moon keys from the moon's parent (+sources:feel,
 ///              +public-keys:feed): there's no azimuth for moons
 
@@ -430,9 +431,83 @@ _unask(mesa_engine* eng, eng_peer* par_u)
 
 /* eng_sys_plea(): a system plea to us; c3y if we took it
 */
+/* _brood(): +ap-serve-brood; [%0 ~] or [%0 ~ coop hutch=[rev idx key]]
+*/
+static mesa_noun
+_brood(mesa_engine* eng, eng_peer* per_u, mesa_noun pax, mesa_noun pay)
+{
+  mesa_noun nul = mesa_cell(mesa_atom_u64(0), mesa_atom_u64(0));
+  mesa_noun dap = mesa_at(6, pax);    //  /gk/agent
+  mesa_noun req = mesa_at(3, pay);    //  [%0 path]
+  c3_c*     dap_c;
+  c3_c*     req_c;
+  c3_c*     inn_c;
+  c3_d      kid_d = 0;
+  eng_shut* shu_u;
+
+  if (  !eng->hok_u.shut_key
+     || (MESA_NONE == dap) || !mesa_is_atom(dap)
+     || !mesa_met3(dap) || (mesa_met3(dap) > 64)
+     || !mesa_is_cell(pay) || (0 != mesa_head(pay))
+     || (MESA_NONE == req) )
+  {
+    return nul;
+  }
+
+  //  //1/spur: only version 1
+  //
+  if (  !mesa_is_cell(req) || (0 != mesa_head(req))
+     || !mesa_is_cell(mesa_tail(req))
+     || (c3n == _cord_is(mesa_head(mesa_tail(req)), "1"))
+     || !(req_c = eng_path_text(mesa_tail(mesa_tail(req)))) )
+  {
+    return nul;
+  }
+  {
+    knot_path pax_u;
+    if ( c3n == knot_path_split(strlen(req_c), req_c, &pax_u) ) {
+      c3_free(req_c);
+      return nul;
+    }
+  }
+  dap_c = mesa_atom_get_cord(dap);
+
+  {
+    mesa_ship her = _her(per_u);
+    eng->hok_o = c3y;
+    kid_d = eng->hok_u.shut_key(eng->hok_u.ctx, her, dap_c, req_c);
+    eng->hok_o = c3n;
+  }
+
+  //  the key must cover what they asked for
+  //
+  inn_c = c3_malloc(strlen(dap_c) + strlen(req_c) + 16);
+  sprintf(inn_c, "/g/x/0/%s//1%s", dap_c, ( '/' == req_c[0] && !req_c[1] ) ? "" : req_c);
+  shu_u = kid_d ? eng_shut_get(eng, kid_d) : 0;
+  if ( shu_u && (c3n == eng_shut_under(shu_u->pre_c, inn_c)) ) {
+    mesa_log("mesa: shut_key gave key %" PRIu64 " for %s, which it "
+             "doesn't cover", kid_d, inn_c);
+    shu_u = 0;
+  }
+  c3_free(inn_c);
+  c3_free(dap_c);
+  c3_free(req_c);
+
+  if ( !shu_u ) {
+    return nul;
+  }
+  mesa_unref(nul);
+  return mesa_cell(mesa_atom_u64(0),
+                   mesa_cell(mesa_atom_u64(0),
+                             mesa_cell(mesa_ref(req),
+                                       mesa_trel(mesa_atom_u64(1),
+                                                 mesa_atom_u64(shu_u->kid_d),
+                                                 mesa_atom_bytes(32, shu_u->key_y)))));
+}
+
 c3_o
 eng_sys_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
-             mesa_noun van, mesa_noun pax)
+             mesa_noun van, mesa_noun pax, mesa_noun pay)
 {
   if (  (c3n == _cord_is(van, "g"))
      || !mesa_is_cell(pax) )
@@ -453,13 +528,19 @@ eng_sys_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
     return c3y;
   }
 
-  //  /gk/agent: a key for one of our %shut paths; we have none, and a
-  //  bare ack would leave their scry hanging
+  //  /gk/agent: a key for one of our %shut paths, if the application
+  //  gives one; always an answer, or their scry would hang
   //
   if ( c3y == _cord_is(mesa_head(pax), "gk") ) {
+    c3_d bon_d = flo_u->bon_d;
+    mesa_noun bod = _brood(eng, per_u, pax, pay);
+
+    if ( !(flo_u = eng_flow_get(per_u, bon_d, DIRE_BAK)) ) {
+      mesa_unref(bod);
+      return c3y;
+    }
     eng_flow_pump(eng, per_u, flo_u,
-                  mesa_cell(mesa_atom_cord("boon"),
-                            mesa_cell(mesa_atom_u64(0), mesa_atom_u64(0))));
+                  mesa_cell(mesa_atom_cord("boon"), bod));
     eng_flow_done(eng, per_u, flo_u, MESA_NONE);
     return c3y;
   }

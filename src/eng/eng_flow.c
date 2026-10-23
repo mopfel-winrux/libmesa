@@ -544,7 +544,7 @@ _sink_plea(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u, mesa_noun pag)
 
   //  vanes' own business (gall's /gf and /gk)
   //
-  if ( c3y == eng_sys_plea(eng, per_u, flo_u, van, pax) ) {
+  if ( c3y == eng_sys_plea(eng, per_u, flo_u, van, pax, pay) ) {
     return;
   }
 

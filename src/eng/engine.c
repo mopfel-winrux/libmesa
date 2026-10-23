@@ -176,6 +176,26 @@ _load_row(void* arg, const uint8_t* key_y, size_t key_z,
       *end_u = msg_u;
     } break;
 
+    case KEY_SHUT: {
+      eng_shut*  shu_u;
+      eng_shut** end_u = &eng->shu_u;
+      c3_d       kid_d = _get_be(key_y + 1);
+
+      if (  (9 != key_z) || !mesa_is_cell(val)
+         || !mesa_is_atom(mesa_head(val)) || (mesa_met3(mesa_head(val)) > 32)
+         || !mesa_is_atom(mesa_tail(val)) )
+      {
+        break;
+      }
+      while ( *end_u && ((*end_u)->kid_d < kid_d) ) end_u = &(*end_u)->nex_u;
+      shu_u = c3_calloc(sizeof(*shu_u));
+      shu_u->kid_d = kid_d;
+      mesa_atom_get_bytes(mesa_head(val), 32, shu_u->key_y);
+      shu_u->pre_c = mesa_atom_get_cord(mesa_tail(val));
+      shu_u->nex_u = *end_u;
+      *end_u = shu_u;
+    } break;
+
     case KEY_GALL: {
       if ( 17 != key_z ) break;
       _key_ship(key_y, who_u);
@@ -237,6 +257,7 @@ _free_state(mesa_engine* eng)
   eng_peer_map_clear(&eng->per_u);
   eng->ali_w = 0;
   eng_cache_free(eng);
+  eng_shut_free(eng);
 }
 
 /* eng_reload(): rebuild memory from the store (after a rollback)
@@ -976,16 +997,16 @@ mesa_spur(mesa_engine* eng, const char* agent)
   return _api_close(eng, MESA_OK);
 }
 
-mesa_err
-mesa_keen(mesa_engine* eng, mesa_ship her, const char* path)
+static mesa_err
+_keen(mesa_engine* eng, mesa_ship her, const char* path,
+      c3_o shu_o, c3_d kid_d, const c3_y* key_y)
 {
   u3_ship   who_u = { her.lo, her.hi };
   eng_peer* per_u;
   eng_req*  req_u;
   knot_path pax_u;
-  c3_c*     pat_c;
 
-  if (  ('/' != path[0])
+  if (  !path || ('/' != path[0]) || (strlen(path) > 1024)
      || (c3n == knot_path_split(strlen(path), path, &pax_u))
      || (c3y == u3_ships_equal(who_u, eng->our_u)) )
   {
@@ -1003,13 +1024,84 @@ mesa_keen(mesa_engine* eng, mesa_ship her, const char* path)
     }
   }
 
-  pat_c = eng_keen_path(per_u, path);
-  req_u = eng_req_add(eng, per_u, pat_c, REQ_KEEN);
+  req_u = eng_req_add(eng, per_u, "", REQ_KEEN);
   req_u->key_c = strdup(path);
-  c3_free(pat_c);
+  req_u->shu_o = shu_o;
+  if ( c3y == shu_o ) {
+    req_u->kid_d = kid_d;
+    memcpy(req_u->shk_y, key_y, 32);
+  }
+  c3_free(req_u->pat_c);
+  req_u->pat_c = eng_keen_path(per_u, req_u);
 
   _contact(eng, per_u);
   eng_req_send(eng, per_u, req_u);
+  return _api_close(eng, MESA_OK);
+}
+
+mesa_err
+mesa_keen(mesa_engine* eng, mesa_ship her, const char* path)
+{
+  return _keen(eng, her, path, c3n, 0, 0);
+}
+
+mesa_err
+mesa_keen_shut(mesa_engine* eng, mesa_ship her, uint64_t kid,
+               const uint8_t key[32], const char* path)
+{
+  if ( !key ) {
+    return MESA_E_ARG;
+  }
+  return _keen(eng, her, path, c3y, kid, key);
+}
+
+/* mesa_shut_add(): +sy-plug; a group key for the paths under [prefix]
+**
+**   stored as 'S' kid(8) -> [key prefix]
+*/
+mesa_err
+mesa_shut_add(mesa_engine* eng, const char* prefix, const uint8_t key[32],
+              uint64_t* kid)
+{
+  knot_path  pax_u;
+  eng_shut*  shu_u;
+  eng_shut** end_u = &eng->shu_u;
+  c3_d       kid_d = 1;
+  c3_y       key_y[9];
+
+  if (  !prefix || !key || !kid || ('/' != prefix[0])
+     || (strlen(prefix) > 1024)
+     || (c3n == knot_path_split(strlen(prefix), prefix, &pax_u))
+     || (pax_u.len_w < 1)
+     || (0 == strncmp(prefix, "/a/", 3)) )
+  {
+    return MESA_E_ARG;
+  }
+  if ( c3n == _api_open(eng) ) {
+    return MESA_E_FAILED;
+  }
+
+  while ( *end_u ) {
+    kid_d = (*end_u)->kid_d + 1;
+    end_u = &(*end_u)->nex_u;
+  }
+  shu_u = c3_calloc(sizeof(*shu_u));
+  shu_u->kid_d = kid_d;
+  memcpy(shu_u->key_y, key, 32);
+  shu_u->pre_c = strdup(prefix);
+  *end_u = shu_u;
+
+  key_y[0] = KEY_SHUT;
+  for ( c3_w i = 0; i < 8; i++ ) {
+    key_y[1 + i] = (c3_y)(kid_d >> (8 * (7 - i)));
+  }
+  eng_put(eng, key_y, 9, mesa_cell(mesa_atom_bytes(32, key),
+                                   mesa_atom_cord(prefix)));
+
+  //  what we've served in the clear may now be covered
+  //
+  eng_cache_free(eng);
+  *kid = kid_d;
   return _api_close(eng, MESA_OK);
 }
 

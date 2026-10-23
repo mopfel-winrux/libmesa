@@ -148,3 +148,86 @@ mesa_gall_kick(mesa_engine* eng, mesa_ship her, uint64_t bone)
   return mesa_flow_boon(eng, her, bone,
                         mesa_cell(mesa_atom_cord("x"), mesa_atom_u64(0)));
 }
+
+/* _path(): a path noun from "/a/b" (empty segments allowed: "//1")
+*/
+static mesa_noun
+_path(const char* pat_c, size_t len_z)
+{
+  const char* end_c;
+
+  if ( !len_z || ('/' != pat_c[0]) ) {
+    return mesa_atom_u64(0);
+  }
+  pat_c++, len_z--;
+  if ( !len_z ) {
+    return mesa_atom_u64(0);
+  }
+  end_c = memchr(pat_c, '/', len_z);
+  {
+    size_t    seg_z = end_c ? (size_t)(end_c - pat_c) : len_z;
+    mesa_noun seg   = mesa_atom_bytes(seg_z, (const uint8_t*)pat_c);
+    return mesa_cell(seg, end_c ? _path(end_c, len_z - seg_z)
+                                : mesa_atom_u64(0));
+  }
+}
+
+mesa_err
+mesa_gall_key(mesa_engine* eng, mesa_ship her, uint64_t bone,
+              const char* path)
+{
+  //  /g/x/<case>/<agent>/<rest>: [%0 rest] on /gk/<agent>
+  //
+  const char* seg_c[4];
+  const char* cur_c = path;
+  char        dap_c[64];
+  size_t      dap_z;
+
+  if ( !path || ('/' != path[0]) || strncmp(path, "/g/x/", 5) ) {
+    return MESA_E_ARG;
+  }
+  for ( int i = 0; i < 4; i++ ) {
+    seg_c[i] = cur_c ? cur_c + 1 : 0;
+    cur_c = cur_c ? strchr(cur_c + 1, '/') : 0;
+  }
+  if ( !cur_c || !seg_c[3] ) {
+    return MESA_E_ARG;
+  }
+  dap_z = (size_t)(cur_c - seg_c[3]);
+  if ( !dap_z || (dap_z >= sizeof(dap_c)) ) {
+    return MESA_E_ARG;
+  }
+  memcpy(dap_c, seg_c[3], dap_z);
+  dap_c[dap_z] = 0;
+
+  return mesa_flow_plea(eng, her, bone, mesa_atom_cord("g"),
+                        mesa_cell(mesa_atom_cord("gk"),
+                                  mesa_cell(mesa_atom_cord(dap_c),
+                                            mesa_atom_u64(0))),
+                        mesa_cell(mesa_atom_u64(0),
+                                  _path(cur_c, strlen(cur_c))));
+}
+
+bool
+mesa_gall_key_parse(mesa_noun boon, uint64_t* kid, uint8_t key[32])
+{
+  //  [%0 ~ coop hutch=[rev idx key]]
+  //
+  mesa_noun hut = mesa_at(15, boon);
+  mesa_noun idx, ky;
+
+  if (  !mesa_is_cell(boon) || (0 != mesa_head(boon))
+     || (MESA_NONE == mesa_at(6, boon)) || (0 != mesa_at(6, boon))
+     || (MESA_NONE == hut) || !mesa_is_cell(hut)
+     || (MESA_NONE == (idx = mesa_at(6, hut)))
+     || (MESA_NONE == (ky  = mesa_at(7, hut)))
+     || !mesa_is_atom(ky) || (mesa_met3(ky) > 64)
+     || !mesa_atom_get_u64(idx, kid) || !*kid )
+  {
+    return false;
+  }
+  //  64-byte keys (%plug) are used through their first 32 bytes
+  //
+  mesa_atom_get_bytes(ky, 32, key);
+  return true;
+}
