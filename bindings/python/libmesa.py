@@ -285,9 +285,12 @@ def unix(d):
     return ((d >> 64) - DA_UNIX_EPOCH) + (d & ((1 << 64) - 1)) / (1 << 64)
 
 def path(text):
-    """a path noun from "/a/b/c" """
-    segs = [s for s in text.split("/") if s]
-    return tuple(segs) + (None,) if segs else None
+    """a path noun from "/a/b/c"; empty segments are kept, as stab keeps
+    them ("/g/x/0/app//1/foo" has an empty one after the agent)"""
+    text = text[1:] if text.startswith("/") else text
+    if not text:
+        return None
+    return tuple(text.split("/")) + (None,)
 
 class Noun:
     """a borrowed noun handle, valid during the hook that handed it out"""

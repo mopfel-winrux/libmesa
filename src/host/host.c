@@ -501,6 +501,13 @@ _tr_breach(void* ctx, mesa_ship her)
   hos_u->app_u.breach(hos_u->app_u.ctx, her);
 }
 
+static uint64_t
+_tr_shut_key(void* ctx, mesa_ship her, const char* agent, const char* spur)
+{
+  mesa_host* hos_u = ctx;
+  return hos_u->app_u.shut_key(hos_u->app_u.ctx, her, agent, spur);
+}
+
 /* lifecycle
 */
 int
@@ -567,6 +574,7 @@ mesa_host_open(const mesa_host_config* cfg, mesa_host** out)
   con_u.hooks.sage   = hos_u->app_u.sage   ? _tr_sage   : 0;
   con_u.hooks.peek   = hos_u->app_u.peek   ? _tr_peek   : 0;
   con_u.hooks.breach = hos_u->app_u.breach ? _tr_breach : 0;
+  con_u.hooks.shut_key = hos_u->app_u.shut_key ? _tr_shut_key : 0;
   con_u.now = _now();
 
   //  the socket and timers first: opening the engine resumes flows, which

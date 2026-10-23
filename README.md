@@ -334,6 +334,7 @@ cp test/e2e/mesa-*.hoon arvo/app/ && echo add %mesa-test %mesa-echo to arvo/desk
 urbit -F zod -A arvo -B solid.pill -c zod -t -x && urbit -t zod &
 zig build e2e && zig-out/bin/mesa-e2e            # as ~nec
 zig-out/bin/mesa-e2e -s bud.db -i ~bud           # as ~bud, persistent
+python3 -I test/e2e/interop.py 77 int.db        # flub/spur, %shut both ways (as ~rec)
 ```
 
 It pokes (ack, crash → nack with naxplanation), watches and receives

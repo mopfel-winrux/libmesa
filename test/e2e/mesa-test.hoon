@@ -5,10 +5,14 @@
 ::      %poke-back  ack, then poke the sender's %libmesa agent back
 ::      [%idle dude]    suspend an agent (gall %idle)
 ::      [%revive desk]  restart a desk's agents (clay %zest, as |revive)
+::      %germ       make /secret a %shut coop, with /secret/x 'treasure'
+::      [%shut-read ship path]  %keen a %shut path of theirs (gall asks
+::                              them for the key over /gk first)
 ::      anything    ack, and give a fact on /updates
 ::
 ::    watch /updates: an immediate fact, then one per poke
-::    remote scry: /g/x/1/mesa-test//1/hello is 'world'
+::    remote scry: /g/x/1/mesa-test//1/hello is 'world'; after %germ,
+::    /g/x/1/mesa-test//1/secret/x is 'treasure', %shut
 ::
 /+  default-agent
 |%
@@ -38,6 +42,15 @@
   ?:  ?=([%revive @] q.vase)
     :_  this
     [%pass /revive %arvo %c %zest ;;(desk +.q.vase) %live]~
+  ?:  =(%germ q.vase)
+    :_  this
+    :~  [%pass /germ %germ /secret]
+        [%pass /tend %tend /secret /x [%noun 'treasure']]
+    ==
+  ?:  ?=([%shut-read @ *] q.vase)
+    =+  ;;([her=@p pax=path] +.q.vase)
+    :_  this
+    [%pass /shut %keen & her pax]~
   =.  pokes  +(pokes)
   :_  this
   :-  [%give %fact ~[/updates] [%noun !>([%poked pokes q.vase])]]
@@ -63,7 +76,16 @@
   ~&  [%mesa-test-agent wire -.sign ?:(?=(%poke-ack -.sign) ?=(~ p.sign) %.y)]
   `this
 ::
-++  on-peek   on-peek:def
-++  on-arvo   on-arvo:def
+++  on-peek
+  |=  =path
+  ^-  (unit (unit cage))
+  ::  anyone may have the key to /secret
+  ?:  ?=([%c %secret @ ~] path)  ``noun+!>(&)
+  (on-peek:def path)
+++  on-arvo
+  |=  [=wire sign=sign-arvo]
+  ^-  (quip card _this)
+  ~&  [%mesa-test-arvo wire ?.(?=([%ames %sage *] sign) -.+.sign sign)]
+  `this
 ++  on-fail   on-fail:def
 --

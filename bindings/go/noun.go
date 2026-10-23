@@ -253,12 +253,17 @@ func List(items ...Value) Value {
 }
 
 // Path is a path from "/a/b/c": [%a %b %c ~].
+//
+// Empty segments are kept, as stab keeps them: "/g/x/0/app//1/foo" has an
+// empty one after the agent.
 func Path(path string) Value {
+	path = strings.TrimPrefix(path, "/")
+	if path == "" {
+		return List()
+	}
 	var segs []Value
 	for _, s := range strings.Split(path, "/") {
-		if s != "" {
-			segs = append(segs, s)
-		}
+		segs = append(segs, s)
 	}
 	return List(segs...)
 }
