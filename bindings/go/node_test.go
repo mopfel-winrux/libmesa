@@ -303,3 +303,121 @@ func TestSQLStore(t *testing.T) {
 		t.Fatalf("hits after restart %d", k)
 	}
 }
+
+func TestFlubThenSpur(t *testing.T) {
+	ra, rb := newRecorder(), newRecorder()
+	flub := true
+	rb.poke = func(n *Node, her Ship, bone uint64, agent, mark string, noun Noun) error {
+		if flub {
+			rb.ev <- event{kind: "flub"}
+			return Flub // not running: they stop until we Spur
+		}
+		rb.ev <- event{kind: "poke"}
+		return nil
+	}
+	a, stopA := start(t, 230, NewMemoryStore(), ra)
+	defer stopA()
+	b, stopB := start(t, 231, NewMemoryStore(), rb)
+	defer stopB()
+
+	a.Do(func() error {
+		bone, err := a.OpenFlow(b.Ship())
+		if err != nil {
+			return err
+		}
+		return a.Poke(b.Ship(), bone, "late", "noun", 1)
+	})
+	rb.next(t, "flub")
+	select {
+	case e := <-ra.ev:
+		t.Fatalf("answered while flubbed: %+v", e)
+	case <-time.After(3 * time.Second):
+	}
+
+	b.Do(func() error {
+		flub = false
+		return b.Spur("late")
+	})
+	rb.next(t, "poke")
+	if e := ra.next(t, "done"); e.nack != nil {
+		t.Fatalf("done: %+v", e)
+	}
+}
+
+type vault struct {
+	*recorder
+	kid uint64
+}
+
+func (v *vault) ShutKey(n *Node, her Ship, agent, spur string) uint64 {
+	if agent == "vault" && strings.HasPrefix(spur, "/secret") {
+		return v.kid
+	}
+	return 0
+}
+
+func (v *vault) Peek(n *Node, her *Ship, path string) (string, Value, bool) {
+	if strings.HasSuffix(path, "/vault//1/secret/x") {
+		return "noun", "treasure", true
+	}
+	return "", nil, false
+}
+
+type reader struct {
+	*recorder
+	path string
+}
+
+func (r *reader) Boon(n *Node, her Ship, bone uint64, payload Noun) {
+	kid, key, ok := ParseKey(payload)
+	if !ok {
+		r.ev <- event{kind: "refused"}
+		return
+	}
+	if err := n.ScryShut(her, kid, key, r.path); err != nil {
+		r.ev <- event{kind: "error", text: err.Error()}
+	}
+}
+
+func TestShut(t *testing.T) {
+	path := "/g/x/0/vault//1/secret/x"
+	ra := &reader{recorder: newRecorder(), path: path}
+	vb := &vault{recorder: newRecorder()}
+	a, stopA := start(t, 232, NewMemoryStore(), ra)
+	defer stopA()
+	b, stopB := start(t, 233, NewMemoryStore(), vb)
+	defer stopB()
+
+	var key [32]byte
+	for i := range key {
+		key[i] = byte(i*5 + 3)
+	}
+	if err := b.Do(func() (err error) {
+		vb.kid, err = b.ShutAdd("/g/x/0/vault//1/secret", key)
+		return
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	//  not in the clear
+	a.Do(func() error { return a.Scry(b.Ship(), path) })
+	select {
+	case e := <-ra.ev:
+		t.Fatalf("public read answered: %+v", e)
+	case <-time.After(2 * time.Second):
+	}
+	a.Do(func() error { return a.Unscry(b.Ship(), path) })
+
+	//  ask for the key; the boon handler reads with it
+	a.Do(func() error {
+		bone, err := a.OpenFlow(b.Ship())
+		if err != nil {
+			return err
+		}
+		return a.RequestKey(b.Ship(), bone, path)
+	})
+	e := ra.next(t, "scry")
+	if e.text != path || e.value != "noun %treasure" {
+		t.Fatalf("scry: %+v", e)
+	}
+}

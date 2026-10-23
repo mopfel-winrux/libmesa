@@ -223,5 +223,74 @@ class TestGalaxyDNS(Base):
             socket.gethostbyname = slow
             a.fake = True
 
+class Late(m.Node):
+    """runs %late only once told to"""
+
+    def setup(self):
+        self.ev = []
+        self.running = False
+
+    def on_poke(self, her, agent, mark, n):
+        if agent != "late" or not self.running:
+            self.ev.append(("flub",))
+            return m.FLUB
+        self.ev.append(("poke", n.text()))
+        return True
+
+class Vault(m.Node):
+    """serves /secret under a %shut key, to anyone who asks"""
+
+    def setup(self):
+        self.kid = 0
+
+    def on_shut_key(self, her, agent, spur):
+        return self.kid if agent == "vault" and spur.startswith("/secret") else 0
+
+    def on_peek(self, her, path_):
+        if path_.endswith("/vault//1/secret/x"):
+            return ("noun", "treasure")
+        return None
+
+class Reader(Plain):
+    path = "/g/x/0/vault//1/secret/x"
+
+    def on_boon(self, her, bone, payload):
+        got = m.Node.parse_key(payload)
+        if got is None:
+            self.ev.append(("refused",))
+            return
+        self.scry_shut(her, got[0], got[1], self.path)
+
+    def on_scry(self, her, path_, mark, n):
+        self.ev.append(("scry", path_, mark, n.text() if n else None))
+
+class TestFlubShut(Base):
+    def test_flub_then_spur(self):
+        b = self.node(Late, 228, "b.db")
+        a = self.node(Plain, 227, "a.db")
+        with a.txn():
+            a.poke(b.our, a.open_flow(b.our), "late", "noun", "hi")
+        self.until(lambda: self.pick(b.ev, "flub"))
+        end = time.time() + 2
+        while time.time() < end:
+            for n in self.nodes:
+                n.step(0.005)
+        self.assertIsNone(self.pick(a.ev, "done"))
+        b.running = True
+        with b.txn():
+            b.spur("late")
+        self.assertEqual(self.until(lambda: self.pick(b.ev, "poke"))[1], "hi")
+        self.assertIsNone(self.until(lambda: self.pick(a.ev, "done"))[2])
+
+    def test_shut(self):
+        b = self.node(Vault, 229, "b.db")
+        a = self.node(Reader, 219, "a.db")
+        with b.txn():
+            b.kid = b.shut_add("/g/x/0/vault//1/secret", bytes(range(32)))
+        with a.txn():
+            a.request_key(b.our, a.open_flow(b.our), Reader.path)
+        got = self.until(lambda: self.pick(a.ev, "scry"))
+        self.assertEqual(got[1:], (Reader.path, "noun", "treasure"))
+
 if __name__ == "__main__":
     unittest.main()

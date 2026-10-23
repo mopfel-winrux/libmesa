@@ -66,6 +66,12 @@ _breach(void* ctx, mesa_ship her)
   goBreach((uintptr_t)ctx, &her);
 }
 
+static uint64_t
+_shut_key(void* ctx, mesa_ship her, const char* agent, const char* spur)
+{
+  return goShutKey((uintptr_t)ctx, &her, (char*)agent, (char*)spur);
+}
+
 void
 mesa_go_hooks(mesa_hooks* hok, uintptr_t ctx)
 {
@@ -79,6 +85,7 @@ mesa_go_hooks(mesa_hooks* hok, uintptr_t ctx)
   hok->sage       = _sage;
   hok->peek       = _peek;
   hok->breach     = _breach;
+  hok->shut_key   = _shut_key;
 }
 
 //  store callbacks

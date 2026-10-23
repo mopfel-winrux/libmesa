@@ -110,7 +110,7 @@ class Store(C.Structure):
         ("close", C.CFUNCTYPE(None, C.c_void_p)),
     ]
 
-ACK, NACK, LATER, DROP = 0, 1, 2, 3
+ACK, NACK, LATER, DROP, FLUB = 0, 1, 2, 3, 4
 
 class Hooks(C.Structure):
     _fields_ = [
@@ -194,6 +194,11 @@ _sig("mesa_flow_done", C.c_int, E, Ship, C.c_uint64, noun_t)
 _sig("mesa_engine_peer", C.c_bool, E, Ship, C.POINTER(Point))
 _sig("mesa_keen", C.c_int, E, Ship, C.c_char_p)
 _sig("mesa_yawn", C.c_int, E, Ship, C.c_char_p)
+_sig("mesa_keen_shut", C.c_int, E, Ship, C.c_uint64, C.c_char_p, C.c_char_p)
+_sig("mesa_shut_add", C.c_int, E, C.c_char_p, C.c_char_p, C.POINTER(C.c_uint64))
+_sig("mesa_spur", C.c_int, E, C.c_char_p)
+_sig("mesa_gall_key", C.c_int, E, Ship, C.c_uint64, C.c_char_p)
+_sig("mesa_gall_key_parse", C.c_bool, noun_t, C.POINTER(C.c_uint64), C.c_char_p)
 _sig("mesa_gall_poke", C.c_int, E, Ship, C.c_uint64, C.c_char_p, C.c_char_p, noun_t)
 _sig("mesa_gall_watch", C.c_int, E, Ship, C.c_uint64, C.c_char_p, noun_t)
 _sig("mesa_gall_leave", C.c_int, E, Ship, C.c_uint64, C.c_char_p)
@@ -604,6 +609,7 @@ class Node:
             h["sage"](self._sage),
             h["peek"](self._peek),
             h["breach"](self._breach),
+            h["shut_key"](self._shut_key),
         )
         #  comets and fake ships may always start fresh; anyone else only
         #  if they say they've breached
@@ -625,14 +631,15 @@ class Node:
 
     def on_poke(self, her, agent, mark, noun_):
         """a poke to [agent]; return True (or ACK) to ack, False (or NACK,
-        or raise) to nack, or DROP for agents you don't run: no answer, so
-        they resend"""
-        return DROP
+        or raise) to nack, or FLUB for agents you don't run: no answer, and
+        they stop resending until spur(agent). DROP doesn't answer either,
+        but they keep resending."""
+        return FLUB
 
     def on_watch(self, her, bone, agent, path_):
         """a subscription; return True (or ACK) to accept (then give facts
-        with fact()), False (or NACK) to refuse, or DROP"""
-        return DROP
+        with fact()), False (or NACK) to refuse, or FLUB (or DROP)"""
+        return FLUB
 
     def on_leave(self, her, bone, agent):
         pass
@@ -656,8 +663,15 @@ class Node:
         """the answer to scry() (mark None if cancelled)"""
 
     def on_peek(self, her, path_):
-        """serve our namespace: return (mark, value) or None"""
+        """serve our namespace: return (mark, value) or None. [her] is the
+        reader of a two-party read; None for public and %shut reads"""
         return None
+
+    def on_shut_key(self, her, agent, spur):
+        """[her]'s gall asks for the key to [agent]'s %shut paths at [spur]
+        (e.g. "/secret/foo", after "//1"): return the kid from shut_add()
+        to give them, or 0 to refuse"""
+        return 0
 
     def on_kick(self, her, bone):
         """our subscription on [bone] was kicked (gall's [%x ~])"""
@@ -727,6 +741,46 @@ class Node:
     def unscry(self, her, path_):
         """stop asking for [path_]; on_scry won't be called for it"""
         _check(lib.mesa_yawn(self.eng, her, path_.encode()), "mesa_yawn")
+
+    def scry_shut(self, her, kid, key, path_):
+        """read a %shut (group-encrypted) path of [her]'s with key [kid]
+        (32 bytes); the answer arrives in on_scry, as for scry()"""
+        if len(key) != 32:
+            raise ValueError("a %shut key is 32 bytes")
+        _check(lib.mesa_keen_shut(self.eng, her, kid, bytes(key), path_.encode()),
+               "mesa_keen_shut")
+
+    def request_key(self, her, bone, path_):
+        """ask [her]'s gall for the key to a %shut path of theirs, e.g.
+        "/g/x/0/agent//1/secret/foo", on our flow [bone]; the answer arrives
+        in on_boon: read it with parse_key()"""
+        _check(lib.mesa_gall_key(self.eng, her, bone, path_.encode()), "mesa_gall_key")
+
+    @staticmethod
+    def parse_key(boon):
+        """the answer to request_key(): (kid, key), or None if refused"""
+        kid = C.c_uint64()
+        key = C.create_string_buffer(32)
+        if not lib.mesa_gall_key_parse(boon.n, C.byref(kid), key):
+            return None
+        return kid.value, key.raw
+
+    def shut_add(self, prefix, key):
+        """serve the paths under [prefix] (e.g. "/g/x/0/my-agent//1/secret";
+        the case isn't compared) encrypted with [key], 32 random bytes, to
+        anyone who has it, and never in the clear. Returns the key's id:
+        give readers the id and key (on_shut_key, or some other way)."""
+        if len(key) != 32:
+            raise ValueError("a %shut key is 32 bytes")
+        kid = C.c_uint64()
+        _check(lib.mesa_shut_add(self.eng, prefix.encode(), bytes(key), C.byref(kid)),
+               "mesa_shut_add")
+        return kid.value
+
+    def spur(self, agent):
+        """our [agent] is running again: requests we flubbed for it are
+        resent"""
+        _check(lib.mesa_spur(self.eng, agent.encode()), "mesa_spur")
 
     # ------------------------------------------------- helper state
 
@@ -956,6 +1010,11 @@ class Node:
             return NONE
         return noun(got)
 
+    def _shut_key(self, ctx, her, agent, spur):
+        got = self._guard(self.on_shut_key, Ship(her.lo, her.hi),
+                          agent.decode(), spur.decode())
+        return int(got or 0)
+
     def _breach(self, ctx, her):
         her = Ship(her.lo, her.hi)
 
@@ -1055,9 +1114,9 @@ class Node:
             self.store.lock.close()          # releases the flock
 
 def _answer(res):
-    """a handler's answer: ACK, NACK, LATER or DROP as such; otherwise
-    truthy acks and falsy (None included) nacks"""
-    if type(res) is int and res in (ACK, NACK, LATER, DROP):
+    """a handler's answer: ACK, NACK, LATER, DROP or FLUB as such;
+    otherwise truthy acks and falsy (None included) nacks"""
+    if type(res) is int and res in (ACK, NACK, LATER, DROP, FLUB):
         return res
     return ACK if res else NACK
 

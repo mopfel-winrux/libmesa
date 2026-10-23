@@ -266,9 +266,10 @@ _plea(void* ctx, mesa_ship her, uint64_t bone, mesa_noun vane,
 
     default: break;
   }
-  //  not ours: no answer (if we ever run that agent, the resend gets it)
+  //  an agent we don't run: tell them to stop asking (a request for
+  //  another vane is dropped: no answer)
   //
-  return MESA_DROP;
+  return MESA_FLUB;
 }
 
 static void

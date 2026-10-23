@@ -69,6 +69,12 @@ var (
 	// undone; the peer will resend it.
 	Drop = errors.New("mesa: drop")
 
+	// Flub, returned from Poke or Watch: we don't run [agent] (now). As
+	// Drop, and the peer stops resending on that flow until Node.Spur
+	// says the agent is back, as Arvo's gall does for agents that aren't
+	// running. From Plea (other vanes), the same as Drop.
+	Flub = errors.New("mesa: flub")
+
 	// Later, returned from Plea: we'll answer with Node.Answer.
 	Later = errors.New("mesa: later")
 
@@ -88,12 +94,12 @@ var (
 // the ack. Nouns they get are borrowed: valid only until they return.
 type App interface {
 	// Poke: [her] poked our [agent] with [mark] and [noun]. Return nil to
-	// ack, Drop if we don't run [agent], or any error to nack (a *Nack
+	// ack, Flub if we don't run [agent], or any error to nack (a *Nack
 	// sets the tag and tang sent back).
 	Poke(n *Node, her Ship, bone uint64, agent, mark string, noun Noun) error
 
 	// Watch: [her] subscribes to [path] on our [agent]. Return nil to
-	// accept (then give facts with Node.Fact on [bone]), Drop, or an
+	// accept (then give facts with Node.Fact on [bone]), Flub, or an
 	// error to refuse.
 	Watch(n *Node, her Ship, bone uint64, agent, path string) error
 
@@ -123,20 +129,30 @@ type App interface {
 	// because [her] breached.
 	Scry(n *Node, her Ship, path, mark string, noun Noun, ok bool)
 
-	// Peek: serve our namespace. [her] is the reader of an encrypted
-	// read, nil for a public one. Return ok false if there's nothing at
-	// [path]. A path's value must never change once it has one.
+	// Peek: serve our namespace. [her] is the reader of a two-party
+	// read, nil for a public one or a %shut one (see Node.ShutAdd).
+	// Return ok false if there's nothing at [path]. A path's value must
+	// never change once it has one.
 	Peek(n *Node, her *Ship, path string) (mark string, value Value, ok bool)
 
 	// Breach: [her] breached; every flow with them is gone.
 	Breach(n *Node, her Ship)
 }
 
-// BaseApp drops every request and ignores every response.
+// ShutKeyer is an App that hands out %shut keys: [her]'s gall asks for
+// the key to [agent]'s %shut paths at [spur] (e.g. "/secret/foo", after
+// "//1"). Return the kid from Node.ShutAdd to give them, or 0 to refuse.
+// Apps that don't implement it refuse everyone.
+type ShutKeyer interface {
+	ShutKey(n *Node, her Ship, agent, spur string) uint64
+}
+
+// BaseApp flubs gall requests (we run no agents), drops other requests,
+// and ignores every response.
 type BaseApp struct{}
 
-func (BaseApp) Poke(*Node, Ship, uint64, string, string, Noun) error { return Drop }
-func (BaseApp) Watch(*Node, Ship, uint64, string, string) error      { return Drop }
+func (BaseApp) Poke(*Node, Ship, uint64, string, string, Noun) error { return Flub }
+func (BaseApp) Watch(*Node, Ship, uint64, string, string) error      { return Flub }
 func (BaseApp) Leave(*Node, Ship, uint64, string)                    {}
 func (BaseApp) Plea(*Node, Ship, uint64, string, Noun, Noun) error   { return Drop }
 func (BaseApp) Fact(*Node, Ship, uint64, string, Noun)               {}
@@ -697,6 +713,8 @@ func goPlea(ctx C.uintptr_t, her *C.mesa_ship, bone C.uint64_t, vane, path, payl
 			res = C.MESA_ACK
 		case errors.Is(err, Drop):
 			res = C.MESA_DROP
+		case errors.Is(err, Flub):
+			res = C.MESA_FLUB
 		case errors.Is(err, Later):
 			res = C.MESA_LATER
 		default:
@@ -826,6 +844,19 @@ func goPeek(ctx C.uintptr_t, her *C.mesa_ship, path *C.char) (res C.mesa_noun) {
 			return
 		}
 		res = h
+	})
+	return
+}
+
+//export goShutKey
+func goShutKey(ctx C.uintptr_t, her *C.mesa_ship, agent, spur *C.char) (res C.uint64_t) {
+	n := nodeOf(ctx)
+	sk, ok := n.app.(ShutKeyer)
+	if !ok {
+		return 0
+	}
+	n.hook("shut_key", func() {
+		res = C.uint64_t(sk.ShutKey(n, shipOf(her), C.GoString(agent), C.GoString(spur)))
 	})
 	return
 }
@@ -1000,6 +1031,69 @@ func (n *Node) Scry(her Ship, path string) error {
 	p := cstr(path)
 	defer C.free(unsafe.Pointer(p))
 	return check(C.mesa_keen(n.eng, her.c(), p))
+}
+
+// ScryShut reads a %shut (group-encrypted) [path] of [her]'s with key
+// [kid], as Scry does; get the key with RequestKey and ParseKey, or some
+// other way.
+func (n *Node) ScryShut(her Ship, kid uint64, key [32]byte, path string) error {
+	if err := n.onLoop(); err != nil {
+		return err
+	}
+	p := cstr(path)
+	defer C.free(unsafe.Pointer(p))
+	return check(C.mesa_keen_shut(n.eng, her.c(), C.uint64_t(kid),
+		(*C.uint8_t)(unsafe.Pointer(&key[0])), p))
+}
+
+// RequestKey asks [her]'s gall for the key to a %shut path of theirs,
+// e.g. "/g/x/0/agent//1/secret/foo", on our flow [bone]. The answer
+// arrives as App.Boon on [bone]: read it with ParseKey.
+func (n *Node) RequestKey(her Ship, bone uint64, path string) error {
+	if err := n.onLoop(); err != nil {
+		return err
+	}
+	p := cstr(path)
+	defer C.free(unsafe.Pointer(p))
+	return check(C.mesa_gall_key(n.eng, her.c(), C.uint64_t(bone), p))
+}
+
+// ParseKey reads the answer to RequestKey; ok is false if they refused.
+func ParseKey(boon Noun) (kid uint64, key [32]byte, ok bool) {
+	var k C.uint64_t
+	if !C.mesa_gall_key_parse(boon.h, &k, (*C.uint8_t)(unsafe.Pointer(&key[0]))) {
+		return 0, key, false
+	}
+	return uint64(k), key, true
+}
+
+// ShutAdd serves the paths under [prefix] (e.g.
+// "/g/x/0/my-agent//1/secret"; the case isn't compared) encrypted with
+// [key], 32 random bytes, to anyone who has it, and never in the clear.
+// It returns the key's id; give readers the id and key (ShutKeyer, or
+// some other way). Keys persist in the store.
+func (n *Node) ShutAdd(prefix string, key [32]byte) (uint64, error) {
+	if err := n.onLoop(); err != nil {
+		return 0, err
+	}
+	p := cstr(prefix)
+	defer C.free(unsafe.Pointer(p))
+	var kid C.uint64_t
+	if err := check(C.mesa_shut_add(n.eng, p, (*C.uint8_t)(unsafe.Pointer(&key[0])), &kid)); err != nil {
+		return 0, err
+	}
+	return uint64(kid), nil
+}
+
+// Spur says our [agent] is running again: requests we flubbed for it
+// are resent.
+func (n *Node) Spur(agent string) error {
+	if err := n.onLoop(); err != nil {
+		return err
+	}
+	a := cstr(agent)
+	defer C.free(unsafe.Pointer(a))
+	return check(C.mesa_spur(n.eng, a))
 }
 
 // Unscry stops asking for [path]; App.Scry won't be called for it.
