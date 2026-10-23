@@ -58,10 +58,10 @@ _noun_ship(mesa_noun som, u3_ship who_u)
   return c3y;
 }
 
-/* _open(): a new forward flow to [per_u] for our own use
+/* _sys_open(): a new forward flow to [per_u] for our own use
 */
 static c3_d
-_open(mesa_engine* eng, eng_peer* per_u)
+_sys_open(mesa_engine* eng, eng_peer* per_u)
 {
   c3_d      bon_d = per_u->bon_d;
   eng_flow* flo_u;
@@ -119,7 +119,7 @@ eng_sys_track(mesa_engine* eng, eng_peer* per_u, mesa_noun msg)
     return;
   }
 
-  per_u->gfb_d = _open(eng, per_u);
+  per_u->gfb_d = _sys_open(eng, per_u);
   per_u->gfo_o = c3y;
   eng_peer_save(eng, per_u);
 
@@ -390,7 +390,7 @@ eng_sys_moon(mesa_engine* eng, eng_peer* per_u)
 
   pap_u = eng_peer_make(eng, par_u);
   if ( c3n == pap_u->jao_o ) {
-    pap_u->jab_d = _open(eng, pap_u);
+    pap_u->jab_d = _sys_open(eng, pap_u);
     pap_u->jao_o = c3y;
     eng_peer_save(eng, pap_u);
   }

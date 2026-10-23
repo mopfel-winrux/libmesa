@@ -47,6 +47,10 @@ jobs:
       - name: Build the core (for the bindings)
         run: zig build -Dno-host=true
 
+      - name: Cross-compile the core for Windows
+        if: runner.os == 'Linux'
+        run: zig build -Dno-host=true -Dtarget=x86_64-windows-gnu -p zig-out-windows
+
       - name: Unit tests under ASan and UBSan
         if: runner.os == 'Linux'
         run: test/sanitize.sh

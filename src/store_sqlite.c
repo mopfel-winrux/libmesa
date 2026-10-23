@@ -12,8 +12,13 @@
 #include "sqlite3.h"
 
 #include <fcntl.h>
-#include <sys/file.h>
 #include <unistd.h>
+#ifdef _WIN32
+#  include <io.h>
+#  include <windows.h>
+#else
+#  include <sys/file.h>
+#endif
 
 typedef struct {
   mesa_store    sto_u;
@@ -24,6 +29,55 @@ typedef struct {
   sqlite3_stmt* put_u;
   sqlite3_stmt* del_u;
 } _sql;
+
+/* _lock_take(): open [lok_c] and lock it exclusively, without waiting.
+**   Returns the descriptor, -1 if it can't be opened, -2 if it's held.
+*/
+static c3_i
+_lock_take(const c3_c* lok_c)
+{
+#ifdef _WIN32
+  c3_i       fid_i = open(lok_c, O_RDWR | O_CREAT | O_BINARY | O_NOINHERIT, 0600);
+  OVERLAPPED ove_u = {0};
+
+  if ( 0 > fid_i ) {
+    return -1;
+  }
+  if ( !LockFileEx((HANDLE)_get_osfhandle(fid_i),
+                   LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                   0, 1, 0, &ove_u) )
+  {
+    close(fid_i);
+    return -2;
+  }
+  return fid_i;
+#else
+  c3_i fid_i = open(lok_c, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+
+  if ( 0 > fid_i ) {
+    return -1;
+  }
+  if ( flock(fid_i, LOCK_EX | LOCK_NB) ) {
+    close(fid_i);
+    return -2;
+  }
+  return fid_i;
+#endif
+}
+
+/* _lock_drop(): unlock and close a descriptor from _lock_take().
+*/
+static void
+_lock_drop(c3_i fid_i)
+{
+#ifdef _WIN32
+  OVERLAPPED ove_u = {0};
+  UnlockFileEx((HANDLE)_get_osfhandle(fid_i), 0, 1, 0, &ove_u);
+#else
+  flock(fid_i, LOCK_UN);
+#endif
+  close(fid_i);
+}
 
 static c3_i
 _exec(_sql* sql_u, const c3_c* cmd_c)
@@ -47,7 +101,7 @@ _begin(void* ctx)
 }
 
 static int
-_commit(void* ctx)
+_sql_commit(void* ctx)
 {
   return _exec(ctx, "COMMIT");
 }
@@ -259,7 +313,7 @@ _scan(void* ctx, const uint8_t* pre_y, size_t pre_z,
 }
 
 static void
-_close(void* ctx)
+_sql_close(void* ctx)
 {
   _sql* sql_u = ctx;
 
@@ -268,8 +322,7 @@ _close(void* ctx)
   sqlite3_finalize(sql_u->del_u);
   sqlite3_close(sql_u->sql_u);
   if ( 0 <= sql_u->lok_i ) {
-    flock(sql_u->lok_i, LOCK_UN);
-    close(sql_u->lok_i);
+    _lock_drop(sql_u->lok_i);
   }
   c3_free(sql_u);
 }
@@ -287,17 +340,12 @@ mesa_store_sqlite(const char* path, const char** err)
   //
   lok_c = c3_malloc(strlen(path) + 8);
   sprintf(lok_c, "%s.lock", path);
-  sql_u->lok_i = open(lok_c, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+  sql_u->lok_i = _lock_take(lok_c);
   c3_free(lok_c);
 
   if ( 0 > sql_u->lok_i ) {
-    *err = "can't open lockfile";
-    c3_free(sql_u);
-    return 0;
-  }
-  if ( flock(sql_u->lok_i, LOCK_EX | LOCK_NB) ) {
-    *err = "state is in use by another process";
-    close(sql_u->lok_i);
+    *err = ( -2 == sql_u->lok_i ) ? "state is in use by another process"
+                                  : "can't open lockfile";
     c3_free(sql_u);
     return 0;
   }
@@ -336,7 +384,7 @@ mesa_store_sqlite(const char* path, const char** err)
   sql_u->sto_u = (mesa_store){
     .ctx      = sql_u,
     .begin    = _begin,
-    .commit   = _commit,
+    .commit   = _sql_commit,
     .rollback = _rollback,
     .mark     = _mark,
     .rewind   = _rewind,
@@ -345,12 +393,12 @@ mesa_store_sqlite(const char* path, const char** err)
     .put      = _put,
     .del      = _del,
     .scan     = _scan,
-    .close    = _close,
+    .close    = _sql_close,
   };
   return &sql_u->sto_u;
 
 fail:
-  _close(sql_u);
+  _sql_close(sql_u);
   return 0;
 }
 

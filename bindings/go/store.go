@@ -12,7 +12,6 @@ import (
 	"os"
 	"runtime/cgo"
 	"sort"
-	"syscall"
 	"unsafe"
 )
 
@@ -283,7 +282,7 @@ func OpenSQLite(driver, path string) (*SQLStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockFile(lock); err != nil {
 		lock.Close()
 		return nil, fmt.Errorf("mesa: %s is in use by another process", path)
 	}

@@ -290,6 +290,11 @@ libuv, curl and OpenSSL, built from the same pinned sources vere uses (in
 (monocypher) and ed25519 parts of urcrypt are built. See
 [docs/getting-started.md](docs/getting-started.md#building).
 
+The core (`-Dno-host=true`) also builds for Windows
+(`-Dtarget=x86_64-windows-gnu`, archives named `mesa.lib` etc.), and the
+Go binding's store lock uses `LockFileEx` there. libmesa-host isn't ported
+to Windows.
+
 Tagging `v*` builds release tarballs (x86_64 and aarch64 Linux and macOS)
 and attaches them to a GitHub release; CI runs the tests on Linux and
 macOS for every push.

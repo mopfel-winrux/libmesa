@@ -60,7 +60,7 @@ _find(_mem* mem_u, const c3_y* key_y, c3_z key_z, c3_o* hit_o)
 }
 
 static c3_y*
-_dup(const c3_y* buf_y, c3_z len_z)
+_mem_dup(const c3_y* buf_y, c3_z len_z)
 {
   c3_y* out_y = c3_malloc(c3_max(len_z, 1));
   memcpy(out_y, buf_y, len_z);
@@ -79,11 +79,11 @@ _journal(_mem* mem_u, const c3_y* key_y, c3_z key_z)
   }
 
   i_z = _find(mem_u, key_y, key_z, &hit_o);
-  und_u.row_u.key_y = _dup(key_y, key_z);
+  und_u.row_u.key_y = _mem_dup(key_y, key_z);
   und_u.row_u.key_z = key_z;
   und_u.had_o = hit_o;
   if ( c3y == hit_o ) {
-    und_u.row_u.val_y = _dup(mem_u->row_u[i_z].val_y, mem_u->row_u[i_z].val_z);
+    und_u.row_u.val_y = _mem_dup(mem_u->row_u[i_z].val_y, mem_u->row_u[i_z].val_z);
     und_u.row_u.val_z = mem_u->row_u[i_z].val_z;
   }
 
@@ -103,7 +103,7 @@ _set(_mem* mem_u, const c3_y* key_y, c3_z key_z,
 
   if ( c3y == hit_o ) {
     c3_free(mem_u->row_u[i_z].val_y);
-    mem_u->row_u[i_z].val_y = _dup(val_y, val_z);
+    mem_u->row_u[i_z].val_y = _mem_dup(val_y, val_z);
     mem_u->row_u[i_z].val_z = val_z;
     return;
   }
@@ -114,9 +114,9 @@ _set(_mem* mem_u, const c3_y* key_y, c3_z key_z,
   }
   memmove(mem_u->row_u + i_z + 1, mem_u->row_u + i_z,
           (mem_u->len_z - i_z) * sizeof(_row));
-  mem_u->row_u[i_z].key_y = _dup(key_y, key_z);
+  mem_u->row_u[i_z].key_y = _mem_dup(key_y, key_z);
   mem_u->row_u[i_z].key_z = key_z;
-  mem_u->row_u[i_z].val_y = _dup(val_y, val_z);
+  mem_u->row_u[i_z].val_y = _mem_dup(val_y, val_z);
   mem_u->row_u[i_z].val_z = val_z;
   mem_u->len_z++;
 }
@@ -168,7 +168,7 @@ _begin(void* ctx)
 }
 
 static int
-_commit(void* ctx)
+_mem_commit(void* ctx)
 {
   _mem* mem_u = ctx;
 
@@ -230,7 +230,7 @@ _get(void* ctx, const uint8_t* key_y, size_t key_z,
   if ( c3n == hit_o ) {
     return 1;
   }
-  *val_y = _dup(mem_u->row_u[i_z].val_y, mem_u->row_u[i_z].val_z);
+  *val_y = _mem_dup(mem_u->row_u[i_z].val_y, mem_u->row_u[i_z].val_z);
   *val_z = mem_u->row_u[i_z].val_z;
   return 0;
 }
@@ -279,8 +279,8 @@ _scan(void* ctx, const uint8_t* pre_y, size_t pre_z,
 
     key_z = row_u->key_z;
     val_z = row_u->val_z;
-    key_y = _dup(row_u->key_y, key_z);
-    val_y = _dup(row_u->val_y, val_z);
+    key_y = _mem_dup(row_u->key_y, key_z);
+    val_y = _mem_dup(row_u->val_y, val_z);
     ret_i = fun_f(arg, key_y, key_z, val_y, val_z);
 
     //  resume after this key, wherever it is now
@@ -295,7 +295,7 @@ _scan(void* ctx, const uint8_t* pre_y, size_t pre_z,
 }
 
 static void
-_close(void* ctx)
+_mem_close(void* ctx)
 {
   _mem* mem_u = ctx;
 
@@ -318,7 +318,7 @@ mesa_store_memory(void)
   mem_u->sto_u = (mesa_store){
     .ctx      = mem_u,
     .begin    = _begin,
-    .commit   = _commit,
+    .commit   = _mem_commit,
     .rollback = _rollback,
     .mark     = _mark,
     .rewind   = _rewind,
@@ -327,7 +327,7 @@ mesa_store_memory(void)
     .put      = _put,
     .del      = _del,
     .scan     = _scan,
-    .close    = _close,
+    .close    = _mem_close,
   };
   return &mem_u->sto_u;
 }

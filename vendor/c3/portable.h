@@ -92,8 +92,8 @@
 #     include <dirent.h>
 #     include <signal.h>
 #     include <sys/time.h>
-#     include "mman.h"
-#     include "compat.h"
+      //  libmesa: vere's mman.h/compat.h shims (mmap, signals, ...)
+      //  aren't used here, and "compat.h" would be src/compat.h
 
 
 #   else
