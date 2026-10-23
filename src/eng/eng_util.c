@@ -230,6 +230,56 @@ _put_be(c3_y* buf_y, c3_d val_d)
   }
 }
 
+/* eng_del_prefix(): delete every row under [pre_y]
+*/
+typedef struct {
+  c3_y** key_y;
+  c3_z*  key_z;
+  c3_w   len_w, cap_w;
+} _keys;
+
+static int
+_take_key(void* arg, const uint8_t* key_y, size_t key_z,
+          const uint8_t* val_y, size_t val_z)
+{
+  _keys* kes_u = arg;
+  (void)val_y; (void)val_z;
+
+  if ( kes_u->len_w == kes_u->cap_w ) {
+    kes_u->cap_w = c3_max(16, kes_u->cap_w * 2);
+    kes_u->key_y = c3_realloc(kes_u->key_y, kes_u->cap_w * sizeof(c3_y*));
+    kes_u->key_z = c3_realloc(kes_u->key_z, kes_u->cap_w * sizeof(c3_z));
+  }
+  kes_u->key_y[kes_u->len_w] = c3_malloc(key_z);
+  memcpy(kes_u->key_y[kes_u->len_w], key_y, key_z);
+  kes_u->key_z[kes_u->len_w] = key_z;
+  kes_u->len_w++;
+  return 0;
+}
+
+void
+eng_del_prefix(mesa_engine* eng, const c3_y* pre_y, c3_z pre_z)
+{
+  _keys kes_u = { 0 };
+
+  if ( c3y == eng->bad_o ) {
+    return;
+  }
+  if ( 0 > eng->sto_u->scan(eng->sto_u->ctx, pre_y, pre_z, _take_key, &kes_u) ) {
+    eng_txn_fail(eng);
+  }
+  else {
+    for ( c3_w i = 0; i < kes_u.len_w; i++ ) {
+      eng_del(eng, kes_u.key_y[i], kes_u.key_z[i]);
+    }
+  }
+  for ( c3_w i = 0; i < kes_u.len_w; i++ ) {
+    c3_free(kes_u.key_y[i]);
+  }
+  c3_free(kes_u.key_y);
+  c3_free(kes_u.key_z);
+}
+
 c3_z
 eng_key(c3_y typ_y, u3_ship who_u, c3_d bon_d, eng_dire dir_e,
         c3_d seq_d, c3_y key_y[40])
@@ -242,7 +292,7 @@ eng_key(c3_y typ_y, u3_ship who_u, c3_d bon_d, eng_dire dir_e,
 
   _put_be(key_y + 1, who_u[1]);
   _put_be(key_y + 9, who_u[0]);
-  if ( (KEY_PEER == typ_y) || (KEY_GALL == typ_y) ) {
+  if ( (KEY_PEER == typ_y) || (KEY_GALL == typ_y) || (KEY_ROUT == typ_y) ) {
     return 17;
   }
 

@@ -32,6 +32,8 @@
 #define ENG_POINT_MS     3600000     //  re-resolve active peers' keys
 #define ENG_CACHE_MAX    (64u << 20) //  served-message cache, bytes
 #define ENG_ALIEN_MAX    4096        //  peers without keys, at once
+#define ENG_IDLE_MS      600000      //  unload a quiet peer from memory
+#define ENG_GC_MS        60000       //  how often we look for them
 
 /* dire: %for (we send pleas) or %bak (we send boons)
 */
@@ -126,9 +128,16 @@ typedef struct _eng_peer eng_peer;
 #define VAL_TY   eng_flow*
 #include "verstable.h"
 
-#define NAME     eng_cork_set
-#define KEY_TY   c3_d
-#include "verstable.h"
+/* corked backward flows: ranges of bones, one list per bone mod 4
+**
+**   [lo hi] holds lo, lo+4, ... hi. Our own corked forward flows aren't
+**   kept: they're our bones below next-bone with no flow.
+*/
+typedef struct { c3_d lo_d, hi_d; } eng_ran;
+typedef struct {
+  eng_ran* ran_u;
+  c3_w     len_w, cap_w;
+} eng_crk;
 
 struct _eng_peer {
   u3_ship       who_u;
@@ -165,7 +174,8 @@ struct _eng_peer {
   //  ossuary
   c3_d          bon_d;       //  next-bone
   eng_flow_map  flo_u;
-  eng_cork_set  cor_u;
+  eng_crk       crk_u[4];    //  corked backward flows
+  c3_d          use_d;       //  last looked up (ms), for unloading
   //  .pit
   eng_req*      req_u;
   //  congestion (vere's u3_gage)
@@ -260,6 +270,8 @@ struct mesa_engine {
   c3_w          txn_w;       //  nesting depth
   c3_o          app_o;       //  app-level transaction open
   c3_o          bad_o;       //  store failed; engine stopped
+  c3_o          lod_o;       //  loading from the store: no lazy loads
+  c3_d          gcd_d;       //  next sweep for idle peers, ms
   c3_o          rel_o;       //  reload memory from the store after commit
   c3_d          api_d;       //  mutating API calls, for nack rollback
   c3_o          hok_o;       //  inside a hook
@@ -303,6 +315,9 @@ void      eng_peer_set_keys(mesa_engine* eng, eng_peer* per_u,
                             c3_d rif_d, c3_d lyf_d, const c3_y pas_y[65]);
 void      eng_peer_breach(mesa_engine* eng, eng_peer* per_u);
 void      eng_peer_free(eng_peer* per_u);
+void      eng_peer_sweep(mesa_engine* eng);
+eng_peer* eng_peer_load(mesa_engine* eng, u3_ship who_u);   //  engine.c
+void      eng_del_prefix(mesa_engine* eng, const c3_y* pre_y, c3_z pre_z);
 void      eng_peer_known(mesa_engine* eng, eng_peer* per_u);
 void      eng_comet_proof(mesa_engine* eng, eng_peer* per_u, mesa_lane lan_u);
 c3_o      eng_comet_take(mesa_engine* eng, eng_peer* per_u,
@@ -361,6 +376,11 @@ eng_flow* eng_flow_make(mesa_engine* eng, eng_peer* per_u, c3_d bon_d,
 void      eng_flow_save(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u);
 void      eng_flow_free(eng_flow* flo_u);
 c3_o      eng_flow_corked(eng_peer* per_u, c3_d bon_d, eng_dire dir_e);
+void      eng_cork_put(mesa_engine* eng, eng_peer* per_u, c3_d bon_d,
+                       c3_o sav_o);
+void      eng_cork_load(eng_peer* per_u, c3_d lo_d, c3_d hi_d);
+c3_w      eng_cork_count(eng_peer* per_u);
+void      eng_cork_wipe(mesa_engine* eng, eng_peer* per_u);
 c3_c*     eng_flow_path(c3_d bon_d, const c3_c* lod_c, eng_dire dir_e,
                         u3_ship srv_u, c3_d seq_d);
 void      eng_flow_pump(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
@@ -410,6 +430,7 @@ void      eng_point_apply(mesa_engine* eng, const mesa_point* pot);
 #define KEY_LOAD  'L'
 #define KEY_CORK  'C'
 #define KEY_GALL  'G'    //  their /gf bone, for telling them our flubs
+#define KEY_ROUT  'R'    //  a route, kept when a peer leaves memory: [ip port]
 #define KEY_SHUT  'S'    //  a %shut key of ours: 'S' kid(8) -> [key prefix]
 
 c3_z eng_key(c3_y typ_y, u3_ship who_u, c3_d bon_d, eng_dire dir_e,

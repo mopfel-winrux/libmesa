@@ -196,6 +196,25 @@ _load_row(void* arg, const uint8_t* key_y, size_t key_z,
       *end_u = shu_u;
     } break;
 
+    case KEY_ROUT: {
+      c3_d ip_d, por_d;
+
+      if ( (17 != key_z) || !mesa_is_cell(val)
+         || !mesa_atom_get_u64(mesa_head(val), &ip_d)
+         || !mesa_atom_get_u64(mesa_tail(val), &por_d) )
+      {
+        break;
+      }
+      _key_ship(key_y, who_u);
+      per_u = eng_peer_make(eng, who_u);
+      if ( c3n == per_u->lan_o ) {
+        per_u->lan_o = c3y;
+        per_u->hop_y = 0;
+        per_u->lan_u = (mesa_lane){ .kind = MESA_LANE_IP, .ip = (uint32_t)ip_d,
+                                    .port = (uint16_t)por_d };
+      }
+    } break;
+
     case KEY_GALL: {
       if ( 17 != key_z ) break;
       _key_ship(key_y, who_u);
@@ -205,11 +224,16 @@ _load_row(void* arg, const uint8_t* key_y, size_t key_z,
     } break;
 
     case KEY_CORK: {
-      if ( 26 != key_z ) break;
+      c3_d lo_d;
+
+      //  ours (%for) are derived now; theirs are ranges [lo] -> hi, or a
+      //  single bone in rows from before
+      //
+      if ( (26 != key_z) || (DIRE_BAK != key_y[25]) ) break;
       _key_ship(key_y, who_u);
       per_u = eng_peer_make(eng, who_u);
-      eng_cork_set_insert(&per_u->cor_u,
-                          (_get_be(key_y + 17) << 1) | (key_y[25] & 1));
+      lo_d  = _get_be(key_y + 17);
+      eng_cork_load(per_u, lo_d, _u64(val) ? _u64(val) : lo_d);
     } break;
 
     default: break;
@@ -224,6 +248,9 @@ _load_state(mesa_engine* eng)
 {
   _load_ctx ctx_u = { .eng = eng, .bad_o = c3n };
   c3_y      pre_y[1];
+  c3_o      ret_o = c3y;
+
+  eng->lod_o = c3y;
 
   //  peers first, so flows find their keys; everything else after
   //
@@ -231,18 +258,54 @@ _load_state(mesa_engine* eng)
   if (  (0 > eng->sto_u->scan(eng->sto_u->ctx, pre_y, 1, _load_row, &ctx_u))
      || (c3y == ctx_u.bad_o) )
   {
-    return c3n;
+    ret_o = c3n;
   }
-  for ( c3_y typ_y = 'A'; typ_y <= 'Z'; typ_y++ ) {
+  for ( c3_y typ_y = 'A'; (c3y == ret_o) && (typ_y <= 'Z'); typ_y++ ) {
     if ( (KEY_PEER == typ_y) || (KEY_IDENT == typ_y) ) continue;
     pre_y[0] = typ_y;
     if (  (0 > eng->sto_u->scan(eng->sto_u->ctx, pre_y, 1, _load_row, &ctx_u))
        || (c3y == ctx_u.bad_o) )
     {
-      return c3n;
+      ret_o = c3n;
     }
   }
-  return c3y;
+  eng->lod_o = c3n;
+  return ret_o;
+}
+
+/* eng_peer_load(): one peer we unloaded, back from the store (0 if the
+**                  store has nothing on them)
+*/
+eng_peer*
+eng_peer_load(mesa_engine* eng, u3_ship who_u)
+{
+  static const c3_y typ_y[] = { KEY_PEER, KEY_FLOW, KEY_LOAD, KEY_CORK, KEY_GALL,
+                                KEY_ROUT };
+  _load_ctx ctx_u = { .eng = eng, .bad_o = c3n };
+  c3_y      pre_y[40];
+
+  if ( c3y == eng->bad_o ) {
+    return 0;
+  }
+
+  eng->lod_o = c3y;
+  for ( c3_w i = 0; i < sizeof(typ_y); i++ ) {
+    eng_key(typ_y[i], who_u, 0, 0, 0, pre_y);
+    if (  (0 > eng->sto_u->scan(eng->sto_u->ctx, pre_y, 17, _load_row, &ctx_u))
+       || (c3y == ctx_u.bad_o) )
+    {
+      eng->lod_o = c3n;
+      eng_txn_fail(eng);
+      return 0;
+    }
+  }
+  eng->lod_o = c3n;
+
+  {
+    eng_peer_map_itr itr_u = eng_peer_map_get(&eng->per_u,
+                               (u3_ship_key){ .d = { who_u[0], who_u[1] } });
+    return eng_peer_map_is_end(itr_u) ? 0 : itr_u.data->val;
+  }
 }
 
 static void
@@ -515,6 +578,8 @@ mesa_engine_open(const mesa_config* cfg, mesa_engine** out)
   eng->hok_o = c3n;
   eng->fak_o = cfg->fake ? c3y : c3n;
   eng->pin_d = cfg->now;
+  eng->lod_o = c3n;
+  eng->gcd_d = cfg->now + ENG_GC_MS;
   eng_peer_map_init(&eng->per_u);
 
   mesa_keys_from_ring(&eng->key_u, 65, cfg->ident.ring);
@@ -699,6 +764,8 @@ mesa_engine_wake(mesa_engine* eng, uint64_t now)
     return;
   }
 
+  eng_peer_sweep(eng);
+
   per_u = _peers(eng, &len_z);
   for ( c3_z i = 0; i < len_z; i++ ) {
     eng_peer* p = per_u[i];
@@ -733,6 +800,9 @@ mesa_engine_deadline(mesa_engine* eng)
 
   if ( c3y == eng->pif_o ) {
     dea_d = UINT64_MAX;
+  }
+  if ( eng_peer_map_size(&eng->per_u) ) {
+    dea_d = c3_min(dea_d, eng->gcd_d);
   }
   for ( eng_peer_map_itr itr_u = eng_peer_map_first(&eng->per_u);
         !eng_peer_map_is_end(itr_u);

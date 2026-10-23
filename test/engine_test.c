@@ -1206,6 +1206,108 @@ _test_flub(_node* zod, _node* moo)
   _clear(zod); _clear(moo);
 }
 
+/* rows in [nod]'s store under [typ_y] and [who]
+*/
+static int
+_count_row(void* arg, const uint8_t* key_y, size_t key_z,
+           const uint8_t* val_y, size_t val_z)
+{
+  (*(c3_w*)arg)++;
+  return 0;
+}
+
+static c3_w
+_rows(_node* nod, c3_y typ_y, mesa_ship who)
+{
+  c3_y pre_y[40];
+  c3_w n_w = 0;
+  eng_key(typ_y, (u3_ship){ who.lo, who.hi }, 0, 0, 0, pre_y);
+  nod->sto->scan(nod->sto->ctx, pre_y, 17, _count_row, &n_w);
+  return n_w;
+}
+
+static c3_o
+_loaded(_node* nod, mesa_ship who)
+{
+  return __( !eng_peer_map_is_end(eng_peer_map_get(&nod->eng->per_u,
+                                    (u3_ship_key){ .d = { who.lo, who.hi } })) );
+}
+
+/* garbage: corks as ranges, idle peers unloaded, moot peers forgotten
+*/
+static void
+_test_gc(_node* zod, _node* nec, _node* moo)
+{
+  c3_d      bon_d[10], las_d, pre_d;
+  eng_peer* nep;
+  c3_w      cor_w;
+  mesa_ship sam = _ship("~sampel-palnet");
+
+  //  ten flows, each corked: one range for nec, no rows for zod
+  //
+  nep   = eng_peer_get(nec->eng, (u3_ship){ zod->who.lo, zod->who.hi });
+  cor_w = eng_cork_count(nep);
+  for ( c3_w i = 0; i < 10; i++ ) {
+    mesa_flow_open(zod->eng, nec->who, &bon_d[i]);
+    _send(zod, nec, bon_d[i], mesa_atom_u64(i));
+    mesa_flow_cork(zod->eng, nec->who, bon_d[i]);
+  }
+  _run(5 * 60 * 1000);
+  expect(10 == _count(zod, "corked"), "corked: %u", _count(zod, "corked"));
+  nep = eng_peer_get(nec->eng, (u3_ship){ zod->who.lo, zod->who.hi });
+  expect(eng_cork_count(nep) <= cor_w + 1, "ranges: %u (were %u)",
+         eng_cork_count(nep), cor_w);
+  expect(_rows(nec, KEY_CORK, zod->who) == eng_cork_count(nep),
+         "a row per range: %u", _rows(nec, KEY_CORK, zod->who));
+  for ( c3_w i = 0; i < 10; i++ ) {
+    eng_peer* zop = eng_peer_get(zod->eng, (u3_ship){ nec->who.lo, nec->who.hi });
+    expect(c3y == eng_flow_corked(zop, bon_d[i], DIRE_FOR), "ours %u", i);
+    expect(c3y == eng_flow_corked(nep, bon_d[i], DIRE_BAK), "theirs %u", i);
+  }
+  _restart(nec);
+  nep = eng_peer_get(nec->eng, (u3_ship){ zod->who.lo, zod->who.hi });
+  expect(c3y == eng_flow_corked(nep, bon_d[4], DIRE_BAK), "after restart");
+  expect(c3n == eng_flow_corked(nep, bon_d[9] + 4, DIRE_BAK), "not past it");
+  _clear(zod); _clear(nec);
+
+  //  a peer we only have keys for: forgotten once idle
+  //
+  {
+    mesa_point pot = _fake_point(sam);
+    mesa_point out;
+    mesa_engine_point(zod->eng, &pot);
+    expect(mesa_engine_peer(zod->eng, sam, &out), "keys for ~sampel-palnet");
+  }
+
+  //  quiet: the moon leaves zod's memory, ~sampel-palnet its store
+  //
+  pre_d = eng_peer_get(zod->eng, (u3_ship){ moo->who.lo, moo->who.hi })->bon_d;
+  _run(15 * 60 * 1000);
+  expect(c3n == _loaded(zod, moo->who), "moon unloaded");
+  expect(c3n == _loaded(zod, sam), "~sampel-palnet unloaded");
+  expect(0 == _rows(zod, KEY_PEER, sam), "~sampel-palnet forgotten");
+  expect(1 == _rows(zod, KEY_PEER, moo->who), "the moon remembered");
+  expect(c3y == _loaded(zod, nec->who), "galaxies stay");
+
+  //  and comes back when we need it, on a fresh bone
+  //
+  {
+    eng_peer* mop;
+    mesa_point out;
+
+    expect(!mesa_engine_peer(zod->eng, sam, &out), "nothing on ~sampel-palnet");
+    expect(MESA_OK == mesa_flow_open(zod->eng, moo->who, &las_d), "open");
+    mop = eng_peer_get(zod->eng, (u3_ship){ moo->who.lo, moo->who.hi });
+    expect(mop && (c3y == mop->kno_o), "reloaded with keys");
+    expect(las_d == pre_d, "next-bone kept: %" PRIu64, las_d);
+    _send(zod, moo, las_d, mesa_atom_cord("still there?"));
+    _run(5 * 60 * 1000);
+    expect(1 == _count(moo, "plea"), "moon heard: %u", _count(moo, "plea"));
+    expect(1 == _count(zod, "done"), "acked: %u", _count(zod, "done"));
+  }
+  _clear(zod); _clear(nec); _clear(moo);
+}
+
 /* gall's system flows: /gk gets [%0 ~] then an ack, /gf an ack; the
 ** application never sees either
 */
@@ -1354,6 +1456,7 @@ main(int argc, char* argv[])
   _test_gall_sys(zod, nec);
   _test_moon(zod, nec);
   _test_flub(zod, &nod_u[non_w - 1]);
+  _test_gc(zod, nec, &nod_u[non_w - 1]);
   _test_garbage(nec);
 
   fprintf(stderr, "engine: %" PRIu64 " datagrams\r\n", sen_d);

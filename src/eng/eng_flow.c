@@ -85,11 +85,152 @@ eng_flow_free(eng_flow* flo_u)
   c3_free(flo_u);
 }
 
+/* corks
+**
+**   Ours (forward) are derived: a bone of ours below next-bone without a
+**   flow was corked. Theirs (backward) are ranges, stored one row per
+**   range: 'C' ship lo %bak -> hi.
+*/
+
+/* _cork_find(): the index of the last range with lo <= [bon_d], or -1
+*/
+static c3_ds
+_cork_find(eng_crk* crk_u, c3_d bon_d)
+{
+  c3_ds lo_ds = 0, hi_ds = (c3_ds)crk_u->len_w - 1, fon_ds = -1;
+
+  while ( lo_ds <= hi_ds ) {
+    c3_ds mid_ds = (lo_ds + hi_ds) / 2;
+    if ( crk_u->ran_u[mid_ds].lo_d <= bon_d ) {
+      fon_ds = mid_ds;
+      lo_ds  = mid_ds + 1;
+    }
+    else {
+      hi_ds = mid_ds - 1;
+    }
+  }
+  return fon_ds;
+}
+
 c3_o
 eng_flow_corked(eng_peer* per_u, c3_d bon_d, eng_dire dir_e)
 {
-  return __( !eng_cork_set_is_end(eng_cork_set_get(&per_u->cor_u,
-                                                   SIDE(bon_d, dir_e))) );
+  if ( DIRE_FOR == dir_e ) {
+    return __(  (0 == (bon_d & 3)) && (bon_d < per_u->bon_d)
+             && !eng_flow_get(per_u, bon_d, DIRE_FOR) );
+  }
+  {
+    eng_crk* crk_u = &per_u->crk_u[bon_d & 3];
+    c3_ds    idx_ds = _cork_find(crk_u, bon_d);
+    return __( (idx_ds >= 0) && (bon_d <= crk_u->ran_u[idx_ds].hi_d) );
+  }
+}
+
+static void
+_cork_row(mesa_engine* eng, eng_peer* per_u, eng_ran* ran_u)
+{
+  c3_y key_y[40];
+  c3_z key_z = eng_key(KEY_CORK, per_u->who_u, ran_u->lo_d, DIRE_BAK, 0, key_y);
+  eng_put(eng, key_y, key_z, mesa_atom_u64(ran_u->hi_d));
+}
+
+static void
+_cork_unrow(mesa_engine* eng, eng_peer* per_u, c3_d lo_d)
+{
+  c3_y key_y[40];
+  eng_del(eng, key_y, eng_key(KEY_CORK, per_u->who_u, lo_d, DIRE_BAK, 0, key_y));
+}
+
+/* eng_cork_load(): a range from the store (or an old one-bone row)
+*/
+void
+eng_cork_load(eng_peer* per_u, c3_d lo_d, c3_d hi_d)
+{
+  eng_crk* crk_u = &per_u->crk_u[lo_d & 3];
+  c3_ds    idx_ds;
+
+  if ( (hi_d < lo_d) || ((hi_d - lo_d) & 3) ) {
+    hi_d = lo_d;
+  }
+  idx_ds = _cork_find(crk_u, lo_d);
+  if ( crk_u->len_w == crk_u->cap_w ) {
+    crk_u->cap_w = c3_max(4, crk_u->cap_w * 2);
+    crk_u->ran_u = c3_realloc(crk_u->ran_u, crk_u->cap_w * sizeof(eng_ran));
+  }
+  memmove(&crk_u->ran_u[idx_ds + 2], &crk_u->ran_u[idx_ds + 1],
+          (crk_u->len_w - (idx_ds + 1)) * sizeof(eng_ran));
+  crk_u->ran_u[idx_ds + 1] = (eng_ran){ lo_d, hi_d };
+  crk_u->len_w++;
+}
+
+/* eng_cork_put(): remember their flow [bon_d] as corked, merging ranges;
+**                 [sav_o] writes the store
+*/
+void
+eng_cork_put(mesa_engine* eng, eng_peer* per_u, c3_d bon_d, c3_o sav_o)
+{
+  eng_crk* crk_u = &per_u->crk_u[bon_d & 3];
+  c3_ds    idx_ds = _cork_find(crk_u, bon_d);
+  eng_ran* lef_u = ( idx_ds >= 0 ) ? &crk_u->ran_u[idx_ds] : 0;
+  eng_ran* rit_u = ( (c3_w)(idx_ds + 1) < crk_u->len_w )
+                   ? &crk_u->ran_u[idx_ds + 1] : 0;
+
+  if ( lef_u && (bon_d <= lef_u->hi_d) ) {
+    return;   //  already
+  }
+  if ( lef_u && (lef_u->hi_d + 4 != bon_d) ) lef_u = 0;
+  if ( rit_u && (bon_d + 4 != rit_u->lo_d) ) rit_u = 0;
+
+  if ( lef_u && rit_u ) {
+    lef_u->hi_d = rit_u->hi_d;
+    if ( c3y == sav_o ) {
+      _cork_unrow(eng, per_u, rit_u->lo_d);
+      _cork_row(eng, per_u, lef_u);
+    }
+    memmove(rit_u, rit_u + 1,
+            (crk_u->len_w - (idx_ds + 2)) * sizeof(eng_ran));
+    crk_u->len_w--;
+  }
+  else if ( lef_u ) {
+    lef_u->hi_d = bon_d;
+    if ( c3y == sav_o ) _cork_row(eng, per_u, lef_u);
+  }
+  else if ( rit_u ) {
+    if ( c3y == sav_o ) _cork_unrow(eng, per_u, rit_u->lo_d);
+    rit_u->lo_d = bon_d;
+    if ( c3y == sav_o ) _cork_row(eng, per_u, rit_u);
+  }
+  else {
+    eng_cork_load(per_u, bon_d, bon_d);
+    if ( c3y == sav_o ) {
+      eng_ran ran_u = { bon_d, bon_d };
+      _cork_row(eng, per_u, &ran_u);
+    }
+  }
+}
+
+c3_w
+eng_cork_count(eng_peer* per_u)
+{
+  c3_w len_w = 0;
+  for ( c3_w i = 0; i < 4; i++ ) len_w += per_u->crk_u[i].len_w;
+  return len_w;
+}
+
+/* eng_cork_wipe(): forget all their corks (a breach), and our old
+**                  per-bone rows
+*/
+void
+eng_cork_wipe(mesa_engine* eng, eng_peer* per_u)
+{
+  c3_y pre_y[40];
+
+  eng_key(KEY_CORK, per_u->who_u, 0, 0, 0, pre_y);
+  eng_del_prefix(eng, pre_y, 17);
+  for ( c3_w i = 0; i < 4; i++ ) {
+    c3_free(per_u->crk_u[i].ran_u);
+    per_u->crk_u[i] = (eng_crk){ 0 };
+  }
 }
 
 /* eng_flow_save(): persist a flow's header
@@ -156,10 +297,10 @@ _flow_abel(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u)
   eng_flow_map_erase(&per_u->flo_u, SIDE(bon_d, dir_e));
   eng_flow_free(flo_u);
 
-  eng_cork_set_insert(&per_u->cor_u, SIDE(bon_d, dir_e));
-  {
-    c3_z key_z = eng_key(KEY_CORK, per_u->who_u, bon_d, dir_e, 0, key_y);
-    eng_put(eng, key_y, key_z, mesa_atom_u64(0));
+  //  ours are corked by being gone; theirs we remember
+  //
+  if ( DIRE_BAK == dir_e ) {
+    eng_cork_put(eng, per_u, bon_d, c3y);
   }
 }
 

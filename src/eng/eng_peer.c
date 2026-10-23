@@ -13,11 +13,23 @@ _key(u3_ship who_u)
   return (u3_ship_key){ .d = { who_u[0], who_u[1] } };
 }
 
+/* eng_peer_get(): [who_u] from memory, or from the store if we unloaded
+**                 them (eng_peer_sweep()); 0 if we've never heard of them
+*/
 eng_peer*
 eng_peer_get(mesa_engine* eng, u3_ship who_u)
 {
   eng_peer_map_itr itr_u = eng_peer_map_get(&eng->per_u, _key(who_u));
-  return eng_peer_map_is_end(itr_u) ? 0 : itr_u.data->val;
+  eng_peer*        per_u;
+
+  if ( !eng_peer_map_is_end(itr_u) ) {
+    per_u = itr_u.data->val;
+  }
+  else if ( (c3y == eng->lod_o) || !(per_u = eng_peer_load(eng, who_u)) ) {
+    return 0;
+  }
+  per_u->use_d = eng->now_d;
+  return per_u;
 }
 
 eng_peer*
@@ -36,8 +48,8 @@ eng_peer_new(mesa_engine* eng, u3_ship who_u)
   per_u->jao_o = c3n;
   per_u->moa_o = c3n;
   per_u->aho_o = c3n;
+  per_u->use_d = eng->now_d;
   eng_flow_map_init(&per_u->flo_u);
-  eng_cork_set_init(&per_u->cor_u);
 
   //  congestion: vere's _init_gage, in ms
   //
@@ -95,6 +107,106 @@ eng_peer_evict(mesa_engine* eng)
   return c3y;
 }
 
+/* _peer_idle(): could [per_u] leave memory? Everything we keep for them
+**               is in the store; what's lost (their lane, rtt) we learn
+**               again. Not while anything of theirs runs on a timer.
+*/
+static c3_o
+_peer_idle(mesa_engine* eng, eng_peer* per_u)
+{
+  if (  (c3__czar == u3_ship_rank(per_u->who_u))
+     || (c3y == u3_ships_equal(per_u->who_u, eng->spo_u))
+     || per_u->req_u
+     || (c3y == per_u->ask_o)
+     || (eng->now_d < per_u->use_d + ENG_IDLE_MS)
+     || (eng->now_d < per_u->con_d + ENG_IDLE_MS) )
+  {
+    return c3n;
+  }
+  for ( eng_flow_map_itr itr_u = eng_flow_map_first(&per_u->flo_u);
+        !eng_flow_map_is_end(itr_u);
+        itr_u = eng_flow_map_next(itr_u) )
+  {
+    eng_flow* flo_u = itr_u.data->val;
+    if (  flo_u->lod_u || (c3y == flo_u->hat_o)
+       || (c3y == flo_u->clo_o) || (c3y == flo_u->pen_o) )
+    {
+      return c3n;
+    }
+  }
+  return c3y;
+}
+
+/* _peer_moot(): is there nothing to remember about [per_u] but keys,
+**               which azimuth (or their attestation) gives again? Never
+**               once we've opened a flow to them: reusing its bone would
+**               look like a corked flow to them.
+*/
+static c3_o
+_peer_moot(eng_peer* per_u)
+{
+  return __(  (0 == per_u->bon_d)
+           && !eng_flow_map_size(&per_u->flo_u)
+           && !eng_cork_count(per_u)
+           && (c3n == per_u->gfo_o) && (c3n == per_u->gbo_o)
+           && (c3n == per_u->jao_o) && (c3n == per_u->aho_o)
+           && (c3n == per_u->moa_o) );
+}
+
+/* eng_peer_sweep(): unload quiet peers; forget the ones there's nothing
+**                   to remember about
+*/
+void
+eng_peer_sweep(mesa_engine* eng)
+{
+  eng_peer** out_u = 0;
+  c3_w       len_w = 0, cap_w = 0;
+
+  if ( eng->now_d < eng->gcd_d ) {
+    return;
+  }
+  eng->gcd_d = eng->now_d + ENG_GC_MS;
+
+  for ( eng_peer_map_itr itr_u = eng_peer_map_first(&eng->per_u);
+        !eng_peer_map_is_end(itr_u);
+        itr_u = eng_peer_map_next(itr_u) )
+  {
+    eng_peer* per_u = itr_u.data->val;
+    if ( c3y == _peer_idle(eng, per_u) ) {
+      if ( len_w == cap_w ) {
+        cap_w = c3_max(16, cap_w * 2);
+        out_u = c3_realloc(out_u, cap_w * sizeof(eng_peer*));
+      }
+      out_u[len_w++] = per_u;
+    }
+  }
+
+  for ( c3_w i = 0; i < len_w; i++ ) {
+    eng_peer* per_u = out_u[i];
+
+    c3_y key_y[40];
+    c3_z key_z = eng_key(KEY_ROUT, per_u->who_u, 0, 0, 0, key_y);
+
+    if ( c3y == _peer_moot(per_u) ) {
+      eng_del(eng, key_y, key_z);
+      eng_del(eng, key_y, eng_key(KEY_PEER, per_u->who_u, 0, 0, 0, key_y));
+    }
+    else if ( (c3y == per_u->lan_o) && (MESA_LANE_IP == per_u->lan_u.kind) ) {
+      //  where they were, to try first when they're back
+      //
+      eng_put(eng, key_y, key_z,
+              mesa_cell(mesa_atom_u64(per_u->lan_u.ip),
+                        mesa_atom_u64(per_u->lan_u.port)));
+    }
+    if ( c3n == per_u->kno_o ) {
+      eng->ali_w--;
+    }
+    eng_peer_map_erase(&eng->per_u, _key(per_u->who_u));
+    eng_peer_free(per_u);
+  }
+  c3_free(out_u);
+}
+
 eng_peer*
 eng_peer_make(mesa_engine* eng, u3_ship who_u)
 {
@@ -112,7 +224,9 @@ eng_peer_free(eng_peer* per_u)
     eng_flow_free(itr_u.data->val);
   }
   eng_flow_map_cleanup(&per_u->flo_u);
-  eng_cork_set_cleanup(&per_u->cor_u);
+  for ( c3_w i = 0; i < 4; i++ ) {
+    c3_free(per_u->crk_u[i].ran_u);
+  }
 
   while ( per_u->req_u ) {
     eng_req* nex_u = per_u->req_u->nex_u;
@@ -397,15 +511,7 @@ eng_peer_breach(mesa_engine* eng, eng_peer* per_u)
   }
   eng_flow_map_clear(&per_u->flo_u);
 
-  for ( eng_cork_set_itr itr_u = eng_cork_set_first(&per_u->cor_u);
-        !eng_cork_set_is_end(itr_u);
-        itr_u = eng_cork_set_next(itr_u) )
-  {
-    c3_d sid_d = itr_u.data->key;
-    eng_del(eng, key_y, eng_key(KEY_CORK, per_u->who_u, sid_d >> 1,
-                                (eng_dire)(sid_d & 1), 0, key_y));
-  }
-  eng_cork_set_clear(&per_u->cor_u);
+  eng_cork_wipe(eng, per_u);
 
   while ( per_u->req_u ) {
     eng_req* nex_u = per_u->req_u->nex_u;
