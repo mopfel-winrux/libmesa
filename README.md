@@ -275,10 +275,11 @@ zig build -Doptimize=ReleaseFast -Dtarget=aarch64-macos   # cross-compile
 ```
 
 An install prefix is self-contained: headers, static archives,
-`libmesa.so`, and pkg-config files (`libmesa`, `libmesa-host`), so
+`libmesa.so`, and pkg-config files (`libmesa` for the shared library,
+`libmesa-static` and `libmesa-host` for the archives), so
 
 ```
-cc app.c $(pkg-config --cflags --libs --static libmesa-host)
+cc app.c $(pkg-config --cflags --libs libmesa-host)
 ```
 
 builds an application with any C compiler. `libmesa.a` needs

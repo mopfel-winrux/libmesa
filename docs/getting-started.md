@@ -37,7 +37,7 @@ Everything is installed under `zig-out/` (`-p dir` picks another prefix):
 | `lib/libmesa.so` (`.dylib`) | the core with urcrypt and SQLite inside, for FFIs; no host |
 | `lib/libmesa-host.a` | the ready-made host: libuv loop, UDP, galaxy DNS, azimuth over HTTPS |
 | `lib/libmesa-uv.a`, `libmesa-curl.a`, `libmesa-ssl.a`, `libmesa-crypto.a` | what the host links against: libuv, curl and OpenSSL 1.1.1, renamed so they can't clash with the system's |
-| `lib/pkgconfig/libmesa.pc`, `libmesa-host.pc` | pkg-config files; relocatable |
+| `lib/pkgconfig/libmesa.pc`, `libmesa-static.pc`, `libmesa-host.pc` | pkg-config files (shared, static, static with the host); relocatable |
 | `include/mesa/*.h` | the public headers; also `sqlite3.h`, `urcrypt.h`, `uv.h` |
 | `bin/mesa-ping`, `bin/mesa-guestbook` | the example tools |
 
@@ -55,14 +55,15 @@ With pkg-config, pointing `PKG_CONFIG_PATH` at the prefix's
 
 ```
 export PKG_CONFIG_PATH=$PWD/zig-out/lib/pkgconfig
-cc app.c $(pkg-config --cflags --libs --static libmesa-host)   # with the host
-cc app.c $(pkg-config --cflags --libs --static libmesa)        # the core only
+cc app.c $(pkg-config --cflags --libs libmesa-host)     # with the host (static)
+cc app.c $(pkg-config --cflags --libs libmesa-static)   # the core, static
+cc app.c $(pkg-config --cflags --libs libmesa)          # the core, shared
 ```
 
-`-lmesa` finds `libmesa.so` if it's there and the linker prefers shared
-libraries (most do); then the program needs it at run time (an rpath, or
-`LD_LIBRARY_PATH`). Delete or move the `.so` for a fully static link, or
-name the archives yourself:
+`libmesa-static` and `libmesa-host` name the archives by path, so the
+linker can't pick `libmesa.so` instead; `--static` isn't needed. With
+`libmesa`, the program needs `libmesa.so` at run time (an rpath, or
+`LD_LIBRARY_PATH`). Without pkg-config, name the archives yourself:
 
 ```
 cc app.c -Izig-out/include \

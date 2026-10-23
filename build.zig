@@ -124,7 +124,22 @@ pub fn build(b: *std.Build) !void {
         \\Version: {s}
         \\Cflags: -I${{includedir}}
         \\Libs: -L${{libdir}} -lmesa
-        \\Libs.private: -lmesa-urcrypt -lmesa-sqlite -lm -lpthread
+        \\
+    , .{version}));
+
+    //  libmesa-static: the archives by name, so the linker can't pick the
+    //  shared library that sits next to them
+    //
+    installPc(b, "libmesa-static.pc", b.fmt(
+        \\prefix=${{pcfiledir}}/../..
+        \\libdir=${{prefix}}/lib
+        \\includedir=${{prefix}}/include
+        \\
+        \\Name: libmesa-static
+        \\Description: libmesa, linked statically
+        \\Version: {s}
+        \\Cflags: -I${{includedir}}
+        \\Libs: ${{libdir}}/libmesa.a ${{libdir}}/libmesa-urcrypt.a ${{libdir}}/libmesa-sqlite.a -lm -lpthread
         \\
     , .{version}));
 
@@ -202,9 +217,9 @@ pub fn build(b: *std.Build) !void {
                     \\Name: libmesa-host
                     \\Description: A ready-made libmesa host: libuv loop, UDP, galaxy DNS, azimuth over HTTPS
                     \\Version: {s}
-                    \\Requires: libmesa
+                    \\Requires: libmesa-static
                     \\Cflags: -I${{includedir}}
-                    \\Libs: -L${{libdir}} -lmesa-host -lmesa-curl -lmesa-ssl -lmesa-crypto -lmesa-uv {s}
+                    \\Libs: ${{libdir}}/libmesa-host.a ${{libdir}}/libmesa-curl.a ${{libdir}}/libmesa-ssl.a ${{libdir}}/libmesa-crypto.a ${{libdir}}/libmesa-uv.a {s}
                     \\
                 , .{ version, if (t.os.tag.isDarwin()) "-lpthread" else "-lpthread -ldl" }));
 
