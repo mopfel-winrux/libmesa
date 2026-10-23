@@ -197,24 +197,60 @@ _gauge_loss(eng_peer* per_u)
   per_u->rto_d = _clamp_rto(per_u->rto_d * 2);
 }
 
-/* _fetch_more(): request fragments while the window is open
+/* _flying(): fragments in flight from [per_u], all downloads together
+*/
+static c3_d
+_flying(eng_peer* per_u)
+{
+  c3_d out_d = 0;
+
+  for ( eng_req* req_u = per_u->req_u; req_u; req_u = req_u->nex_u ) {
+    if ( req_u->fet_u ) out_d += req_u->fet_u->out_d;
+  }
+  return out_d;
+}
+
+/* _fetch_pump(): request fragments while the window is open
+**
+**   The window is the peer's, shared by all our downloads from them (one
+**   path between us), round-robin, a fragment each per round.
 */
 static void
-_fetch_more(mesa_engine* eng, eng_peer* per_u, eng_req* req_u)
+_fetch_pump(mesa_engine* eng, eng_peer* per_u)
 {
-  eng_fetch* fet_u = req_u->fet_u;
+  c3_d out_d = _flying(per_u);
+  c3_o pro_o = c3y;
 
-  while (  (fet_u->nex_d < fet_u->tof_d)
-        && (fet_u->out_d < per_u->wnd_d) )
-  {
-    c3_d fag_d = fet_u->nex_d++;
+  while ( (c3y == pro_o) && (out_d < per_u->wnd_d) ) {
+    pro_o = c3n;
 
-    if ( fet_u->got_y[fag_d] ) continue;
-    fet_u->sen_d[fag_d] = eng->now_d;
-    fet_u->out_d++;
-    _send_peek(eng, per_u, req_u->pat_c, c3n, fag_d);
+    for ( eng_req* req_u = per_u->req_u;
+          req_u && (out_d < per_u->wnd_d);
+          req_u = req_u->nex_u )
+    {
+      eng_fetch* fet_u = req_u->fet_u;
+      c3_d       fag_d;
+
+      if ( !fet_u ) continue;
+      while ( (fet_u->nex_d < fet_u->tof_d) && fet_u->got_y[fet_u->nex_d] ) {
+        fet_u->nex_d++;
+      }
+      if ( fet_u->nex_d >= fet_u->tof_d ) continue;
+
+      fag_d = fet_u->nex_d++;
+      fet_u->sen_d[fag_d] = eng->now_d;
+      fet_u->out_d++;
+      out_d++;
+      pro_o = c3y;
+      _send_peek(eng, per_u, req_u->pat_c, c3n, fag_d);
+    }
   }
-  req_u->nex_d = eng->now_d + per_u->rto_d;
+
+  for ( eng_req* req_u = per_u->req_u; req_u; req_u = req_u->nex_u ) {
+    if ( req_u->fet_u ) {
+      req_u->nex_d = c3_min(req_u->nex_d, eng->now_d + per_u->rto_d);
+    }
+  }
 }
 
 /* _fetch_resend(): re-request fragments that timed out
@@ -237,7 +273,8 @@ _fetch_resend(mesa_engine* eng, eng_peer* per_u, eng_req* req_u)
   if ( c3y == los_o ) {
     _gauge_loss(per_u);
   }
-  _fetch_more(eng, per_u, req_u);
+  req_u->nex_d = eng->now_d + per_u->rto_d;
+  _fetch_pump(eng, per_u);
 }
 
 /* eng_req_send(): (re)send a request
@@ -372,7 +409,8 @@ _fetch_init(mesa_engine* eng, eng_peer* per_u, eng_req* req_u,
   lss_verifier_init(&fet_u->los_u, 0, (c3_h)tof_d, pof_u, &fet_u->are_u);
 
   req_u->fet_u = fet_u;
-  _fetch_more(eng, per_u, req_u);
+  req_u->nex_d = eng->now_d + per_u->rto_d;
+  _fetch_pump(eng, per_u);
 }
 
 /* _fetch_take(): a %data fragment
@@ -437,10 +475,11 @@ _fetch_take(mesa_engine* eng, eng_peer* per_u, eng_req* req_u,
     fet_u->dat_y = 0;
     _req_done(eng, per_u, req_u, tob_z, dat_y);
     c3_free(dat_y);
-    return;
   }
 
-  _fetch_more(eng, per_u, req_u);
+  //  its window slots go to whoever needs them
+  //
+  _fetch_pump(eng, per_u);
 }
 
 /* eng_hear_page(): +hear-page:ev-pact

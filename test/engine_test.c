@@ -202,6 +202,7 @@ static _dgram* net_u;
 static _dgram** nen_u = &net_u;
 static c3_d    now_d = 1000;
 static c3_w    los_w;     //  global loss, percent
+static void  (*ste_f)(void);   //  after each datagram
 static c3_d    sen_d;     //  datagrams sent
 
 static mesa_lane
@@ -406,6 +407,14 @@ _h_peek(void* ctx, const mesa_ship* her, const char* path)
   if ( 0 == strcmp(path, "/g/x/0/test//hello") ) {
     return mesa_cell(mesa_atom_cord("noun"), mesa_atom_cord("world"));
   }
+  if ( 0 == strncmp(path, "/g/x/0/test//big/", 17) ) {
+    c3_y* buf_y = c3_malloc(30000);
+    c3_y  sed_y = (c3_y)path[17];
+    for ( c3_w i = 0; i < 30000; i++ ) buf_y[i] = (c3_y)(i * 29 + sed_y);
+    mesa_noun big = mesa_atom_bytes(30000, buf_y);
+    c3_free(buf_y);
+    return mesa_cell(mesa_atom_cord("noun"), big);
+  }
   if ( 0 == strcmp(path, "/g/x/0/test//big") ) {
     c3_y* buf_y = c3_malloc(20000);
     for ( c3_w i = 0; i < 20000; i++ ) buf_y[i] = (c3_y)(i * 31 + 7);
@@ -524,6 +533,7 @@ _run(c3_d max_d)
          && ((rand() % 100) >= (c3_i)nod->drp_w) )
       {
         mesa_engine_hear(nod->eng, dgm_u->fro_u, dgm_u->buf_y, dgm_u->len_z, now_d);
+        if ( ste_f ) ste_f();
       }
       c3_free(dgm_u->buf_y);
       c3_free(dgm_u);
@@ -851,6 +861,50 @@ _test_shut(_node* zod, _node* nec)
 
   nec->kid_d = 0;
   mesa_unref(psst);
+  _clear(zod); _clear(nec);
+}
+
+/* the congestion window is the peer's: parallel downloads share it
+*/
+static _node* wiz_u;
+static _node* win_u;
+static c3_d   wim_d;    //  most in flight
+static c3_o   wib_o;    //  ever over the window
+
+static void
+_win_step(void)
+{
+  eng_peer* per_u = eng_peer_get(wiz_u->eng, (u3_ship){ win_u->who.lo, win_u->who.hi });
+  c3_d      out_d = 0;
+
+  if ( !per_u ) return;
+  for ( eng_req* req_u = per_u->req_u; req_u; req_u = req_u->nex_u ) {
+    if ( req_u->fet_u ) out_d += req_u->fet_u->out_d;
+  }
+  wim_d = c3_max(wim_d, out_d);
+  if ( out_d > per_u->wnd_d ) wib_o = c3y;
+}
+
+static void
+_test_window(_node* zod, _node* nec)
+{
+  wiz_u = zod; win_u = nec; wim_d = 0; wib_o = c3n;
+  ste_f = _win_step;
+  mesa_keen(zod->eng, nec->who, "/g/x/0/test//big/a");
+  mesa_keen(zod->eng, nec->who, "/g/x/0/test//big/b");
+  mesa_keen(zod->eng, nec->who, "/g/x/0/test//big/c");
+  mesa_keen(zod->eng, nec->who, "/g/x/0/test//big/d");
+  _run(5 * 60 * 1000);
+  ste_f = 0;
+
+  expect(4 == _count(zod, "sage"), "four downloads: %u", _count(zod, "sage"));
+  for ( c3_w i = 0; i < _count(zod, "sage"); i++ ) {
+    mesa_noun gag = _nth(zod, "sage", i)->som;
+    expect((MESA_NONE != gag) && (30000 == mesa_met3(mesa_tail(gag))),
+           "download %u", i);
+  }
+  expect(c3n == wib_o, "never over the window (most %" PRIu64 ")", wim_d);
+  expect(wim_d > 1, "but used it: %" PRIu64, wim_d);
   _clear(zod); _clear(nec);
 }
 
@@ -1446,6 +1500,7 @@ main(int argc, char* argv[])
   _test_big(zod, nec);
   _test_keen(zod, nec);
   _test_shut(zod, nec);
+  _test_window(zod, nec);
   _test_cork(zod, nec);
   _test_later(zod, nec);
   _test_drop(zod, nec);
