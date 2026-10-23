@@ -92,6 +92,27 @@ func FakeIdentity(who Ship) *Identity {
 	return id
 }
 
+// NewIdentity is [who] at [life] and [rift] with the suite %b [ring]: 'B'
+// and 64 bytes of seed. A moon's parent registers the moon with only its
+// Pass, so a moon can make its own keys this way and keep them secret.
+func NewIdentity(who Ship, life, rift uint64, ring [65]byte) *Identity {
+	id := &Identity{}
+	id.c.who = who.c()
+	id.c.life, id.c.rift = C.uint64_t(life), C.uint64_t(rift)
+	for i, b := range ring {
+		id.c.ring[i] = C.uint8_t(b)
+	}
+	return id
+}
+
+// Pass is the identity's public key: 'b' ++ sgn ++ cry, 65 bytes,
+// little-endian as an atom (the pass jael and azimuth hold).
+func (id *Identity) Pass() [65]byte {
+	var p [65]byte
+	C.mesa_ident_pass(&id.c, (*C.uint8_t)(unsafe.Pointer(&p[0])))
+	return p
+}
+
 // ParseKeyfile reads a keyfile: what `urbit -k` takes, or what a
 // parent's |moon prints.
 func ParseKeyfile(text string) (*Identity, error) {

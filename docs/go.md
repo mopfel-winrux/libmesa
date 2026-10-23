@@ -53,7 +53,9 @@ n.Run(ctx)
 stars, galaxies and moons (what `urbit -k` takes, or what `|moon`
 prints); `LoadComet(path)` mines a comet and saves its keyfile at `path`,
 owner-only, or loads the one already there; `FakeIdentity(ship)` for
-fake ships (`urbit -F`).
+fake ships (`urbit -F`); `NewIdentity(who, life, rift, ring)` for keys
+you make yourself (a moon's, say: its parent's `%moon` needs only
+`Pass()`, so the private half never leaves the device).
 
 **Config.** `Identity`, `Store` and `App` (nil: drop everything).
 `Port` 0 binds a galaxy's own port, or an ephemeral one. `Breached`
