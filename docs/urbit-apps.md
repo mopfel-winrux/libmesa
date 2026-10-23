@@ -262,14 +262,26 @@ The engine answers `/gf` and `/gk` itself, so `hooks.plea` never sees
   rolled back (with a store that has savepoints; see
   [store.md](store.md#savepoints));
 - `MESA_LATER`: answer later with `mesa_flow_done()`;
-- `MESA_DROP`: no answer at all.
+- `MESA_FLUB`: an agent we don't run (now). No answer, writes rolled
+  back, and the flow halts: later resends on it are ignored. If the
+  sender's gall asked to hear about our flubs (`/gf`, below), it gets
+  `[%0 %flub agent bone]` and stops resending. For a request to another
+  vane, the same as `MESA_DROP`;
+- `MESA_DROP`: no answer at all; the sender keeps resending.
 
-Return `MESA_DROP` for agents you don't run. That is what Arvo does with
-pleas for an agent that isn't running: the sender keeps resending, so if
-an application that does run the agent takes over the identity later,
-the message is delivered then. A nack would instead tell the sender the
-agent refused it, permanently. (Arvo also sends the sender `%flub`; libmesa
-never does. See the README's deviations.)
+Return `MESA_FLUB` for agents you don't run, as Arvo's gall does for an
+agent that isn't running. Halts are kept in the store (the flow remembers
+the agent), so they outlast restarts. When the agent runs again, call
+`mesa_spur(eng, agent)`: every flow halted for it resumes, and each
+sender gets `[%0 %spur agent]` and resends what it had queued, which then
+reaches `hooks.plea`.
+
+`MESA_DROP` halts nothing: the sender keeps resending, so if an
+application that does run the agent takes over the identity later, the
+message is delivered then. Use it in transient tools that may listen
+later (`mesa-ping` drops what it isn't listening for), where a flub
+would halt the flow until someone spurs. A nack would instead tell the
+sender the agent refused it, permanently.
 
 After acking a watch, send facts on the watcher's bone with
 `mesa_gall_fact(eng, her, bone, mark, noun)`, from the plea handler (an
@@ -297,7 +309,9 @@ and a fact. Tlon's `%chat` does this (below).
 the answer arrives in `hooks.sage` as `[mark noun]`, or `MESA_NONE` if
 the request was dropped because `her` breached. `mesa_yawn()` stops
 asking, and no `sage` follows. Outstanding reads live in memory only:
-ask again after a restart. Gall's paths look like
+after a restart, or a reopen after `MESA_E_FAILED`, no `sage` comes for
+them, so ask again; keep what you asked for in your own state if you
+need to. Gall's paths look like
 `/g/x/<case>/<agent>//<path>`. For example an agent that does
 `[%pass /grow %grow /hello [%noun 'world']]` publishes revision 1 of
 `/hello`, which reads as `/g/x/1/mesa-test//1/hello`
@@ -305,14 +319,54 @@ ask again after a restart. Gall's paths look like
 
 To publish, implement `hooks.peek`: given the inner path (e.g.
 `/g/x/3/guestbook//1/entry`), return a `[mark noun]` cell, or `MESA_NONE`
-if there's nothing there. `her` is `NULL` for public reads and the reader
-for two-party encrypted ones. Paths under `/a/` are the engine's own and
-never reach the hook.
+if there's nothing there. `her` is `NULL` for public and `%shut` reads,
+and the reader for two-party encrypted ones. Paths under `/a/` are the
+engine's own and never reach the hook.
 
 Bindings must be immutable: once a path has a value it must always have
 that same value. Readers download a value in pages and check them against
 the whole message, and anyone may cache it. Put a version or counter in
 the path (the case) and publish new values at new paths, as `%grow` does.
+
+### `%shut`: group-encrypted paths
+
+A `%shut` path is readable by anyone holding its key, and by no one else.
+On the wire it's `/shut/<kid>/<sealed path>`: the inner path sealed with
+the key (`+seal-path`), the value encrypted with it and signed with our
+key, as Arvo's `+peek-shut` does.
+
+**Serving.** `mesa_shut_add(eng, prefix, key, &kid)` registers `key` (32
+random bytes) for the paths under `prefix`, e.g.
+`/g/x/0/my-agent//1/secret`, and gives its id. Matching is segment by
+segment and ignores the case (the third segment), so `/g/x/7/my-agent//1/
+secret/foo` is covered. A covered path is served only encrypted: a public
+read of it gets nothing, so it can't leak in the clear. `hooks.peek` gets
+`her == NULL` for a `%shut` read. Keys are kept in the store; ids count
+up from 1. Paths under `/a/` can't have keys.
+
+Readers need `kid` and `key`. Give them yourself, or answer gall's key
+requests: Arvo's gall, before a `%keen` with `secret=&`, pleas
+`[%g /gk/<agent> [%0 path]]` to us, where `path` is what follows the
+agent (`//1/secret/foo`). The engine calls
+
+```c
+uint64_t (*shut_key)(void* ctx, mesa_ship her, const char* agent,
+                     const char* spur);   //  spur: "/secret/foo"
+```
+
+and answers `[%0 ~ coop [rev idx key]]` with the key you name, or
+`[%0 ~]` if you return 0 (or have no `shut_key` hook, or name a key that
+doesn't cover the path).
+
+**Reading.** `mesa_keen_shut(eng, her, kid, key, path)` reads a `%shut`
+path; the answer comes in `hooks.sage` as for `mesa_keen`, and
+`mesa_yawn` stops it. To get the key from an Arvo ship, ask its gall as
+Arvo does: `mesa_gall_key(eng, her, bone, path)` on a flow of ours, with
+the full path (`/g/x/1/agent//1/secret/x`); its answer arrives as a boon
+on that bone, and `mesa_gall_key_parse(boon, &kid, key)` gives the key,
+or false if refused. The agent decides who gets it (gall asks its
+`on-peek` at `/c/<coop>/<ship>`). Arvo's gall keys are 64 bytes (`%plug`);
+the cipher uses their first 32, which is what `mesa_gall_key_parse` gives.
 
 ## What the engine does for you
 
@@ -328,9 +382,10 @@ speaks them, and `hooks.plea`/`boon`/`done` never see them
   halted flow to that ship (one still out is flubbed again). The
   application sees nothing: no ack until the agent is back. (See the
   README's Arvo issue 4 for a bug on the receiving side.)
-- **Their `/gf` and `/gk` to us.** `/gf` is acked (we never flub). A `/gk`
-  key request for a `%shut` path is answered `[%0 ~]`, since we have no
-  encrypted namespace; a bare ack would leave their scry hanging.
+- **Their `/gf` and `/gk` to us.** `/gf` is acked, and its bone kept (in
+  the store): our `%flub`s (`MESA_FLUB`) and `%spur`s (`mesa_spur`) are
+  boons on it. A `/gk` key request is answered with a key or `[%0 ~]`
+  (above), always: a bare ack would leave their scry hanging.
 - **Moon keys.** There is no azimuth for moons. For a moon peer (not our
   own, and not on a fake network) the engine asks its parent's jael with
   `[%j /public-keys [%0 %public-keys (set ship)]]` and stays on that flow,
@@ -459,7 +514,8 @@ database (`mesa_store_sqlite_db()`).
   `(ship, bone)`; a leave deletes the row, and so does a breach.
 - **Remote scry** `/g/x/<n>/guestbook//1/entry`: entry *n* as `%noun`
   `[id who text]`. Entries never change, so the binding is immutable.
-- Everything else, including pokes to other agents, is `MESA_DROP`.
+- Pokes and watches to other agents are `MESA_FLUB`; anything else is
+  dropped.
 
 ```
 mesa-ping ... ~our guestbook 'hello!'

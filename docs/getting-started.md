@@ -406,7 +406,10 @@ on_sage(void* ctx, mesa_ship her, const char* path, mesa_noun gage)
 The engine retries until it gets an answer; a second `mesa_keen` for a
 path already pending does nothing, and `mesa_yawn` gives up on one
 without calling `sage`. Pending reads live in memory, not in the store:
-after a restart, ask again.
+after a restart, or a reopen after `MESA_E_FAILED`, no `sage` comes for
+them, so ask again (keep a record in your own table if you need one).
+`mesa_keen_shut` reads a `%shut` (group-encrypted) path with its key; see
+[urbit-apps.md](urbit-apps.md#shut-group-encrypted-paths).
 
 ## Being poked
 
@@ -425,12 +428,17 @@ do with the message:
 - `MESA_LATER`: no answer yet. Call `mesa_flow_done(eng, her, bone,
   error)` later, from your own transaction, with `MESA_NONE` to ack or an
   error to nack. Later messages on that flow wait until then.
+- `MESA_FLUB`: a gall request to an agent we don't run. No answer,
+  writes rolled back, and the flow halts; the sender is told (`%flub`)
+  and stops resending until `mesa_spur(eng, agent)` says the agent is
+  back. As Arvo's gall does for an agent that isn't running. For other
+  vanes, the same as `MESA_DROP`.
 - `MESA_DROP`: not ours; no answer at all, writes rolled back. The peer
-  keeps resending, as it would to an Arvo ship whose agent isn't running,
-  so the message is delivered if an application that does run that agent
-  later takes over this identity.
+  keeps resending, so the message is delivered if an application that
+  does run that agent later takes over this identity.
 
-Drop anything you don't recognise. (Gall's own `/gf` and `/gk` flows,
+Flub gall requests for agents you don't run; drop anything else you don't
+recognise. (Gall's own `/gf` and `/gk` flows,
 `MESA_GALL_SYSTEM`, are answered by the engine and never reach the hook.)
 
 ```c
@@ -442,7 +450,7 @@ on_plea(void* ctx, mesa_ship her, uint64_t bone, mesa_noun vane,
 
   switch ( mesa_gall_request_parse(vane, path, payload, &req) ) {
     case MESA_GALL_POKE: {
-      if ( strcmp(req.agent, "echo") ) return MESA_DROP;
+      if ( strcmp(req.agent, "echo") ) return MESA_FLUB;
       if ( !mesa_is_atom(req.noun) ) {
         *error = mesa_cell(mesa_atom_cord("bad-poke"), mesa_atom_u64(0));
         return MESA_NACK;
@@ -452,7 +460,7 @@ on_plea(void* ctx, mesa_ship her, uint64_t bone, mesa_noun vane,
     }
 
     case MESA_GALL_WATCH:
-      if ( strcmp(req.agent, "echo") ) return MESA_DROP;
+      if ( strcmp(req.agent, "echo") ) return MESA_FLUB;
       //  ...remember (her, bone) as a subscriber...
       return MESA_ACK;
 

@@ -178,8 +178,8 @@ that caused it.
 | method | when | return |
 | --- | --- | --- |
 | `setup(self)` | once, in the constructor, before the engine opens | |
-| `on_poke(self, her, agent, mark, noun)` | a gall poke to `agent` | ack, nack or `DROP` (below) |
-| `on_watch(self, her, bone, agent, path)` | a gall subscription (`%s`, or `%l` whose mark is ignored) | ack (accept), nack (refuse) or `DROP` |
+| `on_poke(self, her, agent, mark, noun)` | a gall poke to `agent` | ack, nack, `FLUB` or `DROP` (below) |
+| `on_watch(self, her, bone, agent, path)` | a gall subscription (`%s`, or `%l` whose mark is ignored) | ack (accept), nack (refuse), `FLUB` or `DROP` |
 | `on_leave(self, her, bone, agent)` | a gall leave; always acked | ignored |
 | `on_plea(self, her, bone, vane, path, payload)` | any plea that isn't a gall request | ack, nack, `LATER` or `DROP` |
 | `on_fact(self, her, bone, mark, noun)` | a fact on a subscription of ours | ignored |
@@ -188,7 +188,8 @@ that caused it.
 | `on_done(self, her, bone, error)` | our plea on `bone` was acked (`error` is `None`) or nacked (`error` is a list of lines) | ignored |
 | `on_corked(self, her, bone)` | our cork of `bone` was acked: the flow is gone (no `on_done` for the cork) | ignored |
 | `on_scry(self, her, path, mark, noun)` | the answer to `scry()`; `mark` and `noun` are `None` if it was dropped (`her` breached) | ignored |
-| `on_peek(self, her, path)` | a read of our namespace; `her` is `None` for public reads | `(mark, value)` or `None` |
+| `on_peek(self, her, path)` | a read of our namespace; `her` is `None` for public and `%shut` reads | `(mark, value)` or `None` |
+| `on_shut_key(self, her, agent, spur)` | `her`'s gall asks for the key to `agent`'s `%shut` paths at `spur` (`/secret/x`, after `//1`) | a kid from `shut_add()`, or 0 to refuse |
 | `on_breach(self, her)` | `her` breached; every flow with them is gone | ignored |
 | `on_tick(self)` | every loop turn, outside any transaction | ignored |
 | `extra_fds(self)` | each turn: more objects for `select()` to wait on | list |
@@ -196,20 +197,24 @@ that caused it.
 
 Argument types: `her` is a `Ship`; `bone` an int; `agent`, `mark` and
 `path` are `str` (paths as `"/a/b"`); `noun`, `vane`, `payload` are
-borrowed `Noun` handles. The defaults drop every poke, watch and plea,
-serve nothing, and ignore everything else.
+borrowed `Noun` handles. The defaults flub every poke and watch (we run
+no agents), drop every other plea, serve nothing, refuse every key, and
+ignore everything else.
 
 How the return value of a request handler becomes an answer:
 
-- `ACK`, `NACK`, `LATER` and `DROP` mean what they say. Any other value
+- `ACK`, `NACK`, `LATER`, `DROP` and `FLUB` mean what they say. Any other value
   acks if truthy and nacks if falsy, so `True`/`False` work, and `None`
   (falling off the end) nacks. `LATER` is meant for `on_plea`.
 - If any of the three raises, the traceback is printed and the plea is
   nacked with the error `[%python-error [%leaf "<message>"] ~]` (the
   first 200 characters of the exception).
-- A nack or drop rolls back the handler's writes (a savepoint); an ack
-  commits them with the ack. A drop sends nothing: the peer keeps
-  resending, as Arvo does for an agent that isn't running.
+- A nack, drop or flub rolls back the handler's writes (a savepoint); an
+  ack commits them with the ack. A drop sends nothing: the peer keeps
+  resending. A flub (for an agent we don't run) halts the flow and tells
+  the sender to stop, as Arvo's gall does for an agent that isn't
+  running; `node.spur(agent)` says the agent is back, and what was
+  flubbed for it is resent. For non-gall pleas `FLUB` is `DROP`.
 - `LATER` means "I'll answer this later": call `node.done(her, bone)`
   to ack, or `node.done(her, bone, error)` to nack, from a transaction
   of your own. Later messages on that flow wait until then.
@@ -241,6 +246,19 @@ node.fact(her, bone, mark, value)                # on their backward flow (a sub
 node.kick(her, bone)                             # end their subscription
 node.scry(her, "/g/x/0/agent//some/path")        # answer arrives in on_scry
 node.unscry(her, "/g/x/0/agent//some/path")      # stop asking; no on_scry
+node.spur(agent)                                 # our agent is back: resume what we flubbed
+```
+
+`%shut` (group-encrypted) paths, as in
+[urbit-apps.md](urbit-apps.md#shut-group-encrypted-paths):
+
+```python
+kid = node.shut_add("/g/x/0/my-agent//1/secret", os.urandom(32))
+                                                 # serve what's under it, only encrypted
+node.request_key(her, bone, "/g/x/1/agent//1/secret/x")
+                                                 # ask their gall; answer in on_boon
+kid, key = m.Node.parse_key(payload)             # in on_boon; None if refused
+node.scry_shut(her, kid, key, "/g/x/1/agent//1/secret/x")   # answer in on_scry
 ```
 
 For vanes other than gall: `node.plea(her, bone, vane, path, payload)`
@@ -268,8 +286,9 @@ transaction each engine call runs in its own, which is fine for a single
 send.
 
 Datagrams go out only after the transaction commits. Nothing is sent
-until the loop runs. Outstanding scries live in memory only: ask again
-after a restart.
+until the loop runs. Outstanding scries (`scry`, `scry_shut`) live in
+memory only: after a restart no `on_scry` comes for them, so ask again;
+keep what you asked for in your own table if you need to.
 
 ### Keys, galaxies, tracing
 
@@ -498,7 +517,7 @@ import libmesa as m
 class Echo(m.Node):
     def on_poke(self, her, agent, mark, noun):
         if agent != "echo":
-            return m.DROP                 # not ours: no answer, they resend
+            return m.FLUB                 # not ours: they stop asking
         print(her, "poked %echo with", mark, m.cord(noun) or noun.py())
         return True                       # ack
 
@@ -512,9 +531,10 @@ print(node.our, "is online")
 node.run()
 ```
 
-From a dojo: `:~comet-name/echo 'hi'`. Returning `m.DROP` for other
-agents leaves their pleas unanswered, so a later app that runs them on
-the same identity still gets them.
+From a dojo: `:~comet-name/echo 'hi'`. Returning `m.FLUB` for other
+agents tells their senders to stop until `spur()`; `m.DROP` would leave
+them resending, so a later app that runs those agents on the same
+identity still gets them.
 
 ### Poking ~zod's %ping
 

@@ -4,8 +4,8 @@
 
 A standalone C library for speaking Urbit's **mesa** networking protocol, so
 any application can talk to Urbit ships as if it were one: poke and
-subscribe to gall agents, remote-scry their namespaces, and be poked and
-scried in turn.
+subscribe to gall agents, remote-scry their namespaces (public and
+`%shut`, group-encrypted), and be poked and scried in turn.
 
 Mesa is split across two codebases: vere's `io/mesa.c` is only the
 transport, while crypto, flows, acks and namespace serving live in Arvo's
@@ -18,8 +18,10 @@ remote-scries and is poked by a fake `~zod` running stock vere and Arvo
 restarts.
 
 It speaks the vanes' own flows for the application: moons' keys come from
-their parents (jael), and a peer whose agent isn't running pauses our flow
-to it (gall's %flub/%spur) instead of being resent to forever.
+their parents (jael), a peer whose agent isn't running pauses our flow
+to it (gall's %flub/%spur) instead of being resent to forever, we do the
+same for agents we don't run, and `%shut` keys are exchanged over gall's
+`/gk`.
 
 On the live network, a freshly mined libmesa comet pokes `~zod` directly
 (`%ping` acks; `%hood` nacks with its stack trace) and a planet under a
@@ -171,13 +173,20 @@ perform them after the commit.
 `mesa_flow_done()` lets a handler return `MESA_LATER` and ack later, from
 its own transaction.
 
-A handler returns `MESA_DROP` for requests that aren't its business, such
-as a poke to an agent it doesn't run: no ack, no nack, its writes rolled
-back. The peer keeps resending (Arvo does the same with pleas for agents
-that aren't running), so if an application that does run that agent
-takes over the identity, the message is delivered then. `mesa-ping` drops
-every poke it isn't listening for, so borrowing an identity from a
-running app never refuses that app's traffic.
+A handler returns `MESA_FLUB` for a gall request to an agent it doesn't
+run, as Arvo's gall does: no ack, no nack, its writes rolled back, and
+the flow halts. If the sender asked to hear about our flubs (its gall
+pleas `/gf` to us before its first request, and we remember that flow),
+it gets `[%flub agent bone]` there and stops resending. Halts persist;
+`mesa_spur(eng, agent)` says the agent is back: the halted flows resume
+and each sender gets `[%spur agent]` and resends. For requests to other
+vanes, `MESA_FLUB` is `MESA_DROP`.
+
+`MESA_DROP` is no answer at all, without halting: the peer keeps
+resending, so if an application that does run that agent takes over the
+identity later, the message is delivered then. `mesa-ping` drops every
+poke it isn't listening for, so borrowing an identity from a running app
+never refuses (or halts) that app's traffic.
 
 ### State and identity
 
@@ -191,6 +200,19 @@ talked to anyone:
   rift went up since. Comets start fresh on their own.
 - It refuses a store that belongs to another ship or a later life or rift
   (`MESA_E_IDENTITY`).
+
+The engine keeps in memory only the peers it's busy with. A peer with
+nothing on a timer (no unacked message, no download, no halted or closing
+flow) that hasn't been looked up for ten minutes leaves memory, and comes
+back from the store when it's next looked up; its last direct route is
+kept for that. A peer we never opened a flow to, with no flows or corks
+with us, is forgotten altogether: azimuth (or its attestation) gives its
+keys again. A ship we have opened a flow to is never forgotten, since
+reusing its bones would look like corked flows to it.
+
+Outstanding remote scries (`mesa_keen`, `mesa_keen_shut`) live in memory
+only: after a restart, or a reopen after `MESA_E_FAILED`, no answer comes
+for them; ask again.
 
 ### Ships that still speak classic ames to us
 
@@ -231,9 +253,13 @@ them, and the application never sees them:
 - **gall `/gf`:** before our first gall request to a ship, we ask to hear
   about its agents' flubs. A ship whose agent isn't running drops our
   plea and sends `%flub`; we stop resending that flow until `%spur`
-  (the agent is back), as Arvo does. Their `/gf` to us is acked.
-- **gall `/gk`:** key requests for `%shut` scry paths are answered
-  `[%0 ~]` (we have none); a bare ack would leave their scry hanging.
+  (the agent is back), as Arvo does. Their `/gf` to us is acked and its
+  bone kept: our `%flub`s and `%spur`s (`MESA_FLUB`, `mesa_spur`) go
+  there.
+- **gall `/gk`:** a key request for one of our `%shut` paths
+  (`[%0 path]`) asks `hooks.shut_key`, and is answered `[%0 ~]` (refused)
+  or `[%0 ~ coop [rev idx key]]`; always answered, since a bare ack would
+  leave their scry hanging.
 - **jael `/public-keys`:** moons' keys, above.
 - **`/app/ping`:** every 25s to our galaxy, so it can reach us.
 
@@ -277,8 +303,12 @@ macOS for every push.
 - `engine`: engines on a simulated network: pleas, nacks and
   naxplanations, boons, 50KB messages, remote scry, corks, deferred acks,
   30% packet loss, crash-restarts, comets, and 200k garbage datagrams;
-- `engine`: moons (keys from the parent, a rekey, a breach), flubs (a
-  halted flow stays quiet until `%spur`), gall's `/gk` and `/gf`;
+- `engine`: moons (keys from the parent, a rekey, a breach), flubs both
+  ways (a halted flow stays quiet until `%spur`, across a restart),
+  gall's `/gk` and `/gf`, `%shut` (keys over `/gk`, reads, covered paths
+  never public, keys across a restart), a congestion window shared by
+  parallel downloads, and peer GC (cork ranges, idle peers unloaded and
+  reloaded, moot ones forgotten);
 - `store`: both stores' semantics, boot checks, and exactly-once delivery
   into an application table across 12 crash-restarts on a lossy network;
 - `aes_siv`: AES-256-SIV against Hoon's `++sivc`; `engine` also checks
@@ -380,10 +410,14 @@ flow back to vere.
   left-nested nouns. jam's output doesn't depend on the hash.
 - Retransmission backs off from 1s to ~m2 per request; vere retries twice
   at 1s and Arvo every ~m2. Timing only; the protocol is unchanged.
+- Congestion control is vere's (`u3_gage`: AIMD window, RTT/RTO
+  estimates), but the window is the peer's, shared round-robin by all our
+  downloads from it; in vere each download has a window of its own.
 - No forwarding: a libmesa galaxy doesn't relay for its children.
-- We never flub: requests for agents we don't run are dropped
-  (`MESA_DROP`) without telling the sender to stop.
-- Not yet: `%shut` (group-encrypted) scry of our own, IPv6.
+- `%shut` key prefixes: Arvo doesn't check that a `%shut` read's path is
+  under its key's path (`XX check path prefix` in `+peek-shut`); we do,
+  ignoring the case segment, and never serve a covered path in the clear.
+- Not yet: IPv6.
 
 ### Vere and Arvo issues found along the way
 

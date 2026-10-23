@@ -37,7 +37,7 @@ type echo struct{ mesa.BaseApp }
 
 func (echo) Poke(n *mesa.Node, her mesa.Ship, bone uint64, agent, mark string, noun mesa.Noun) error {
 	if agent != "echo" {
-		return mesa.Drop // not an agent we run: no answer
+		return mesa.Flub // not an agent we run: they stop asking
 	}
 	log.Printf("%s says %s", her, noun.Text())
 	return nil // ack
@@ -77,7 +77,7 @@ event's store transaction.
 
 | method | when | return |
 | --- | --- | --- |
-| `Poke(n, her, bone, agent, mark, noun)` | a poke to our agent | `nil` acks, `mesa.Drop` for agents we don't run, any other error nacks |
+| `Poke(n, her, bone, agent, mark, noun)` | a poke to our agent | `nil` acks, `mesa.Flub` for agents we don't run (or `mesa.Drop`), any other error nacks |
 | `Watch(n, her, bone, agent, path)` | a subscription | same; give facts with `n.Fact` on `bone` |
 | `Leave(n, her, bone, agent)` | they unsubscribed | |
 | `Plea(n, her, bone, vane, path, payload)` | any other request | as Poke, or `mesa.Later` and answer with `n.Answer` |
@@ -87,17 +87,29 @@ event's store transaction.
 | `Done(n, her, bone, nack)` | our message was acked (`nack` nil) or nacked | |
 | `Corked(n, her, bone)` | our flow is closed for good | |
 | `Scry(n, her, path, mark, noun, ok)` | the answer to `n.Scry` (`ok` false: they breached) | |
-| `Peek(n, her, path)` | a read of our namespace (`her` nil if public) | `mark, value, true`, or `ok` false |
+| `Peek(n, her, path)` | a read of our namespace (`her` nil if public or `%shut`) | `mark, value, true`, or `ok` false |
 | `Breach(n, her)` | they breached; our flows with them are gone | |
 
 A nack's error goes back to the peer as `[%go-error tang]` with the
 error's text; return a `*mesa.Nack{Tag, Lines}` to choose the tag and
 lines. A panic in a handler is logged, and in Poke, Watch or Plea nacks.
 
-Drop and nack differ: a dropped request gets no answer at all, so the
-peer resends it later; Arvo does the same for agents that aren't running.
-Both undo the handler's writes, which needs a store with savepoints
-(both stores here have them; see [store.md](store.md#savepoints)).
+`BaseApp` flubs every poke and watch (it runs no agents) and drops
+every other plea.
+
+Flub, drop and nack differ. A dropped request gets no answer at all, so
+the peer resends it later. A flubbed one gets none either, and the flow
+halts: the sender's gall is told to stop until `n.Spur(agent)` says the
+agent is back, then resends; Arvo's gall does this for agents that
+aren't running. From `Plea` (other vanes), `Flub` is `Drop`. All three
+undo the handler's writes, which needs a store with savepoints (both
+stores here have them; see [store.md](store.md#savepoints)).
+
+An App that also implements `ShutKeyer`,
+`ShutKey(n, her, agent, spur string) uint64`, hands out `%shut` keys:
+`her`'s gall asks for the key to `agent`'s paths at `spur` (`/secret/x`,
+after `//1`); return a kid from `n.ShutAdd`, or 0 to refuse. Apps that
+don't implement it refuse everyone.
 
 ## Sending
 
@@ -128,11 +140,20 @@ runs `fn` on the loop, in a transaction, once `d` has passed.
 | `Cork(her, bone)` | close our flow, after a leave is acked |
 | `Fact(her, bone, mark, value)` / `Kick(her, bone)` | to a subscriber of ours |
 | `Scry(her, path)` / `Unscry(her, path)` | remote scry, e.g. `/g/x/1/agent//1/path` |
+| `ShutAdd(prefix, key)` | serve the paths under `prefix` only encrypted with `key` (32 random bytes); returns its kid |
+| `RequestKey(her, bone, path)` | ask their gall for the key to a `%shut` path; the answer is a `Boon` on `bone`: `mesa.ParseKey(payload)` gives `kid, key, ok` |
+| `ScryShut(her, kid, key, path)` | read a `%shut` path with its key; the answer arrives in `Scry` |
+| `Spur(agent)` | our agent is back: what we flubbed for it is resent |
 | `Plea`, `Boon`, `Answer` | raw requests and responses, for other vanes |
 | `Peer(her)` | the keys, rift and sponsor we have for them |
 
 Messages on one flow are delivered in order, one at a time; see
-[urbit-apps.md](urbit-apps.md) for gall's protocol and building nouns.
+[urbit-apps.md](urbit-apps.md) for gall's protocol, `%shut` and building
+nouns.
+
+Outstanding scries (`Scry`, `ScryShut`) live in memory only: after a
+restart no `Scry` answer comes for them, so ask again; keep what you
+asked for in your own table if you need to.
 
 ## Helpers
 

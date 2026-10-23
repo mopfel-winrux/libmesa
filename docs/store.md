@@ -138,6 +138,7 @@ What the handler's return value does:
 | `MESA_ACK`, `MESA_LATER` | `release`; the writes stay | the writes stay |
 | `MESA_NACK` | `rewind`, `release`; the handler's datagrams are cut; the nack and error are recorded | the engine stops (`MESA_E_FAILED`); the whole event is rolled back |
 | `MESA_DROP` | `rewind`, `release`; the handler's datagrams are cut; no answer | no answer, nothing undone: the handler must not have written |
+| `MESA_FLUB` | as `MESA_DROP`, then the flow is halted (saved) and a `%flub` queued to the sender | as `MESA_DROP`, then the same |
 
 If a rewound handler called the engine's API (sent a message, opened a
 flow), the engine's memory no longer matches the store; it rebuilds it
@@ -176,9 +177,12 @@ the row type; integers are big-endian so that scans come back in order.
 | --- | --- | --- | --- | --- |
 | `KEY_IDENT` | `'I'` | type | 1 | our identity |
 | `KEY_PEER` | `'P'` | type, ship | 17 | a peer: keys, sponsor, next bone, system flows |
-| `KEY_FLOW` | `'F'` | type, ship, bone, dire | 26 | a flow's state |
-| `KEY_CORK` | `'C'` | type, ship, bone, dire | 26 | a corked (closed) flow |
+| `KEY_FLOW` | `'F'` | type, ship, bone, dire | 26 | a flow's state (a flow we flubbed keeps its agent) |
+| `KEY_CORK` | `'C'` | type, ship, bone (lo), dire | 26 | their corked flows `lo`, `lo+4` ... `hi`; the value is `hi` |
 | `KEY_LOAD` | `'L'` | type, ship, bone, dire, seq | 34 | a message we sent on a flow, not yet acked |
+| `KEY_GALL` | `'G'` | type, ship | 17 | the bone of their gall `/gf` flow to us, for our `%flub`s |
+| `KEY_ROUT` | `'R'` | type, ship | 17 | `[ip port]`: a peer's last direct route, saved when it left memory |
+| `KEY_SHUT` | `'S'` | type, kid (8) | 9 | one of our `%shut` keys: `[key prefix]` |
 
 - ship: 16 bytes, the 128-bit `@p` big-endian;
 - bone: 8 bytes;
@@ -188,6 +192,21 @@ the row type; integers are big-endian so that scans come back in order.
 
 Values are jammed nouns. The identity row is
 `[[ship rift life ring] ping-bone=(unit @)]`; treat the rest as opaque.
+
+Corks: only theirs (dire 1) are stored. Ours aren't: a bone of ours below
+the peer's next bone with no flow was corked. Their corked bones are
+merged into ranges as they come, a row per range; a row with value 0 (as
+older versions wrote, one per bone, ours included) is read as a single
+bone, and old rows for our own corks are ignored.
+
+Not every peer is in memory. One with nothing on a timer (no unacked
+message, download, halted or closing flow, or pending `MESA_LATER`) that
+hasn't been looked up for ten minutes is unloaded, at most a minute
+later, and read back from its rows when it's next looked up; its last
+direct route is saved under `'R'` first. A peer we never opened a flow to
+(next bone 0), with no flows, no corks and no system flows, is forgotten:
+its `'P'` and `'R'` rows are deleted, and its keys are looked up again if
+we hear from it.
 Neither the key layout nor the values are a stable public API: they can
 change between versions, and only libmesa should read or write them.
 
@@ -235,8 +254,8 @@ writes join whatever transaction the engine has open:
 
 - inside `hooks.plea`, `hooks.boon` and `hooks.done`, they commit with
   the event, and the ack or nack goes out only after that commit;
-- a plea handler's writes are inside its savepoint, so `MESA_NACK` and
-  `MESA_DROP` undo them;
+- a plea handler's writes are inside its savepoint, so `MESA_NACK`,
+  `MESA_DROP` and `MESA_FLUB` undo them;
 - elsewhere, wrap your writes and the engine calls that go with them in
   `mesa_txn_begin`/`mesa_txn_commit`; `mesa_txn_abort` rolls both back.
 

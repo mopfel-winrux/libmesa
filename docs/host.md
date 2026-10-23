@@ -23,11 +23,11 @@ interface, and [urbit-apps.md](urbit-apps.md) for the application hooks.
 | keeps time | calls `mesa_engine_wake` at `mesa_engine_deadline` |
 | finds peers' keys | answers `hooks.need_point` with `mesa_engine_point` or `mesa_engine_point_missing` |
 | knows where galaxies are | resolves `MESA_LANE_GALAXY` lanes |
-| checks our own keys | looks up our point before `mesa_engine_open`, fills `our_sponsor` |
+| checks our own keys | looks up our point before `mesa_engine_open`, fills `our_sponsor` and `has_sponsor` |
 | runs everything on one thread | the engine and nouns are not thread-safe |
 
 The application's hooks (`plea`, `boon`, `done`, `corked`, `sage`,
-`peek`, `breach`) are the application's business; a host passes them
+`peek`, `breach`, `shut_key`) are the application's business; a host passes them
 through. libmesa-host keeps the application's `hooks.ctx` by installing
 trampolines that take the host as `ctx` and call the application's hook
 with the application's `ctx` (`_tr_plea` and friends in `host.c`).
@@ -42,7 +42,7 @@ Fill a `mesa_config`:
   is taken as 0 by the engine; resolve it first (below).
 - `store`: any `mesa_store` ([store.md](store.md)).
 - `hooks`: yours, with `send` and `need_point` set.
-- `our_sponsor`: see [Our own point](#our-own-point).
+- `our_sponsor`, `has_sponsor`: see [Our own point](#our-own-point).
 - `breached`: allow an empty store. The engine only exempts comets; fake
   ships need it on every run. `tools/cli.c` sets it for `-F`, and `Node`
   passes `breached or self.fake`.
@@ -316,8 +316,8 @@ mesa_ident_pass(&ide, pot.pass);
 mesa_engine_point(eng, &pot);
 ```
 
-(`Node` sets `has_sponsor = False` instead; the engine then falls back
-to `+sein`, which is the same.) Set `mesa_config.fake`, `breached`, and
+(For our own point, `Node` leaves `has_sponsor` false on a fake network;
+the engine then uses `+sein`, which is the same.) Set `mesa_config.fake`, `breached`, and
 route galaxies to `127.0.0.1:31337 + g`.
 
 ### Our own point
@@ -331,14 +331,14 @@ own point, unless we're fake, a comet or a moon:
    `mesa_ident_pass(&ident, pass)`. Mismatch: `MESA_HOST_E_KEYS` (the
    keyfile is stale or wrong; peers couldn't talk to us).
 3. If `ident.rift == MESA_RIFT_UNKNOWN`, take azimuth's rift.
-4. If `has_sponsor`, set `cfg.our_sponsor` to the sponsor.
+4. If azimuth names a sponsor, set `cfg.our_sponsor` to it and
+   `cfg.has_sponsor` to true.
 
 `our_sponsor` matters for stars and planets: it's where the engine routes
 our pings and where peers reach us through. The engine ignores it for
-galaxies, moons (the parent) and comets (`+sein`), and falls back to
-`+sein` when it's `{0, 0}`. That is also `~zod`, so `~zod` can't be named
-explicitly: a star that escaped to `~zod` gets its `+sein` instead. `Node` does the same check, but only for stars
-and planets, and then sets an unknown rift to 0.
+galaxies, moons (the parent) and comets (`+sein`), and uses `+sein` when
+`has_sponsor` is false. `Node` (Python and Go) does the same check, but
+only for stars and planets, and then sets an unknown rift to 0.
 
 ## Threading
 
@@ -390,9 +390,11 @@ resulting deadline is then already due and the next wake fixes it.
   API may be called (they run inside the event's transaction, so the
   writes and sends commit with it). `mesa_txn_begin` returns
   `MESA_E_STATE` from `plea`, `boon`, `done`, `corked` and `breach`;
-  don't call it from any hook. A `plea` handler that nacks or drops has
-  its API calls rolled back with its writes; that needs a store with
-  savepoints ([store.md](store.md#savepoints)).
+  don't call it from any hook. A `plea` handler that nacks, drops or
+  flubs has its API calls rolled back with its writes; that needs a
+  store with savepoints ([store.md](store.md#savepoints)).
+- `shut_key`: return a kid (from `mesa_shut_add`) or 0; it runs inside
+  the event, but needs nothing from the engine.
 - `send`, `need_point`: call nothing on the engine.
 
 ## Engine failure
