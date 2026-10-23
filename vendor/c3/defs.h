@@ -208,7 +208,7 @@
         void* rut = malloc(s);                                  \
         if ( 0 == rut ) {                                       \
           fprintf(stderr, "c3_malloc(%" PRIu64 ") failed\r\n",  \
-                          (c3_d)s);                             \
+                          (c3_d)(s));                           \
           u3_assert(!"memory lost");                            \
         }                                                       \
         rut;})
@@ -216,7 +216,7 @@
         void* rut = calloc(1,s);                                \
         if ( 0 == rut ) {                                       \
           fprintf(stderr, "c3_calloc(%" PRIu64 ") failed\r\n",  \
-                          (c3_d)s);                             \
+                          (c3_d)(s));                           \
           u3_assert(!"memory lost");                            \
         }                                                       \
         rut;})

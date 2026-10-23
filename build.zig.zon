@@ -13,6 +13,12 @@
         //  for libmesa-host only; the same wrappers vere uses
         .libuv = .{ .path = "./ext/libuv", .lazy = true },
         .curl = .{ .path = "./ext/curl", .lazy = true },
+        //  macOS headers, for cross-compiling to macOS (as ext/openssl)
+        .macos_sdk = .{
+            .url = "https://github.com/joseluisq/macosx-sdks/releases/download/14.5/MacOSX14.5.sdk.tar.xz",
+            .hash = "N-V-__8AAKtK4FMzqcFsY_ZrpMg9bGH0h7BqZDXtVyAerMtM",
+            .lazy = true,
+        },
         .sqlite = .{
             .url = "https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz",
             .hash = "N-V-__8AAJ-VwwDaAVSvGsN1z0uZTm2aAeq1ZO5tulayl2Cy",

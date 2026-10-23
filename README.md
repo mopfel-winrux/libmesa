@@ -1,5 +1,7 @@
 # libmesa
 
+[![ci](https://github.com/mopfel-winrux/libmesa/actions/workflows/ci.yml/badge.svg)](https://github.com/mopfel-winrux/libmesa/actions/workflows/ci.yml)
+
 A standalone C library for speaking Urbit's **mesa** networking protocol, so
 any application can talk to Urbit ships as if it were one: poke and
 subscribe to gall agents, remote-scry their namespaces, and be poked and
@@ -237,13 +239,28 @@ Requires zig 0.15.2 (the same version vere uses).
 ```
 zig build                      # zig-out/lib/, zig-out/bin/mesa-ping
 zig build test -Dno-host=true  # all unit tests, without building the host
-zig build -Doptimize=ReleaseFast
+zig build -Doptimize=ReleaseFast -p /usr/local    # install
+zig build -Doptimize=ReleaseFast -Dtarget=aarch64-macos   # cross-compile
 ```
 
-`libmesa.a` needs `libmesa-urcrypt.a` and `libmesa-sqlite.a`;
-`libmesa-host.a` also needs libuv, curl and OpenSSL (built from the same
-pinned sources vere uses, in `ext/`). Only the BLAKE3, ChaCha
-(monocypher) and ed25519 parts of urcrypt are built.
+An install prefix is self-contained: headers, static archives,
+`libmesa.so`, and pkg-config files (`libmesa`, `libmesa-host`), so
+
+```
+cc app.c $(pkg-config --cflags --libs --static libmesa-host)
+```
+
+builds an application with any C compiler. `libmesa.a` needs
+`libmesa-urcrypt.a` and `libmesa-sqlite.a`; `libmesa-host.a` also needs
+libuv, curl and OpenSSL, built from the same pinned sources vere uses (in
+`ext/`) and installed as `libmesa-uv.a`, `libmesa-curl.a`,
+`libmesa-ssl.a` and `libmesa-crypto.a`. Only the BLAKE3, ChaCha
+(monocypher) and ed25519 parts of urcrypt are built. See
+[docs/getting-started.md](docs/getting-started.md#building).
+
+Tagging `v*` builds release tarballs (x86_64 and aarch64 Linux and macOS)
+and attaches them to a GitHub release; CI runs the tests on Linux and
+macOS for every push.
 
 ## Tests
 
@@ -348,6 +365,10 @@ flow back to vere.
   undefined in `lss_builder_finalize`). Added `lss_recover_root()`: pages
   are authenticated over the message's BLAKE3 hash (`+recover-root`), and
   vere's `lss_root()` omits BLAKE3's ROOT flag, so it isn't that hash.
+- `c3/defs.h`: `c3_malloc`/`c3_calloc` cast their argument with
+  parentheses, `(c3_d)(s)`; `(c3_d)s` cast only the first operand of
+  `n ? n : 1`, a `-Wformat` error where `size_t` isn't `unsigned long
+  long` (macOS).
 - `noun.c` (new, replaces u3 nouns): jam's dedup table hashes with a 64-bit
   structural hash rather than `+mug`. Iterating the 31-bit `+mug` up a deep
   spine cycles after ~2^15.5 levels, which made jam quadratic on deep

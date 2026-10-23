@@ -34,46 +34,57 @@ Everything is installed under `zig-out/` (`-p dir` picks another prefix):
 | --- | --- |
 | `lib/libmesa.a` | the core: engine, gall encoding, nouns, identities, both stores |
 | `lib/libmesa-urcrypt.a`, `lib/libmesa-sqlite.a` | what the core links against |
+| `lib/libmesa.so` (`.dylib`) | the core with urcrypt and SQLite inside, for FFIs; no host |
 | `lib/libmesa-host.a` | the ready-made host: libuv loop, UDP, galaxy DNS, azimuth over HTTPS |
-| `lib/liblibuv.a`, `lib/libcurl.a` | what the host links against (plus OpenSSL, below) |
-| `lib/libmesa.so` | the core with urcrypt and SQLite inside, for FFIs; no host |
-| `include/mesa/*.h` | the public headers; also `sqlite3.h`, `uv.h`, `curl/` |
+| `lib/libmesa-uv.a`, `libmesa-curl.a`, `libmesa-ssl.a`, `libmesa-crypto.a` | what the host links against: libuv, curl and OpenSSL 1.1.1, renamed so they can't clash with the system's |
+| `lib/pkgconfig/libmesa.pc`, `libmesa-host.pc` | pkg-config files; relocatable |
+| `include/mesa/*.h` | the public headers; also `sqlite3.h`, `urcrypt.h`, `uv.h` |
 | `bin/mesa-ping`, `bin/mesa-guestbook` | the example tools |
+
+The prefix is self-contained: copy or unpack it anywhere. Release
+tarballs on GitHub are this directory, built for x86_64 and aarch64
+Linux (glibc 2.28 or later) and macOS.
 
 The core has no I/O of its own. Almost every application wants the host
 too, unless it drives the engine itself (see [host.md](host.md)).
 
 ### Linking
 
-The simplest way to build an application is the way the tools are built:
-add an executable to `build.zig` that links `host`, `lib`, `crypt`, `sql`,
-libuv and curl, as the `tools` loop there does for `tools/mesa-ping.c`.
-Zig then finds every dependency, OpenSSL included.
-
-With another toolchain, the core alone links like this:
+With pkg-config, pointing `PKG_CONFIG_PATH` at the prefix's
+`lib/pkgconfig`:
 
 ```
-cc app.c -Izig-out/include \
-   zig-out/lib/libmesa.a zig-out/lib/libmesa-urcrypt.a zig-out/lib/libmesa-sqlite.a \
-   -lm -lpthread
+export PKG_CONFIG_PATH=$PWD/zig-out/lib/pkgconfig
+cc app.c $(pkg-config --cflags --libs --static libmesa-host)   # with the host
+cc app.c $(pkg-config --cflags --libs --static libmesa)        # the core only
 ```
 
-or against the shared library (`-Lzig-out/lib -lmesa`, and an rpath or
-`LD_LIBRARY_PATH` at run time). With the host, add `libmesa-host.a` in
-front and libuv, curl and OpenSSL behind:
+`-lmesa` finds `libmesa.so` if it's there and the linker prefers shared
+libraries (most do); then the program needs it at run time (an rpath, or
+`LD_LIBRARY_PATH`). Delete or move the `.so` for a fully static link, or
+name the archives yourself:
 
 ```
 cc app.c -Izig-out/include \
    zig-out/lib/libmesa-host.a zig-out/lib/libmesa.a \
    zig-out/lib/libmesa-urcrypt.a zig-out/lib/libmesa-sqlite.a \
-   zig-out/lib/liblibuv.a zig-out/lib/libcurl.a \
-   $(find .zig-cache -name libssl.a | head -1) $(find .zig-cache -name libcrypto.a | head -1) \
+   zig-out/lib/libmesa-curl.a zig-out/lib/libmesa-ssl.a \
+   zig-out/lib/libmesa-crypto.a zig-out/lib/libmesa-uv.a \
    -lm -lpthread -ldl
 ```
 
-curl is built against the pinned OpenSSL 1.1.1 that vere uses, and its
-archives are not installed into `zig-out/lib`; they stay in `.zig-cache`.
-A system OpenSSL 3 does not satisfy it.
+(the core alone is the middle line plus `-lm -lpthread`). curl is built
+against the pinned OpenSSL 1.1.1 that vere uses; a system OpenSSL 3 does
+not satisfy it, so link the bundled one. `test/install/check.sh PREFIX`
+builds and runs a program each way against an installed prefix.
+
+The archives are built without LTO, so any C compiler links them. `zig
+build -Dlto=true` builds libuv, curl and OpenSSL with LTO, as vere does;
+those archives then hold LLVM bitcode, and only zig can link them.
+
+Or build your application the way the tools are built: add an executable
+to `build.zig` that links `host`, `lib`, `crypt`, `sql`, libuv and curl,
+as the `tools` loop there does for `tools/mesa-ping.c`.
 
 ## Choosing an identity
 

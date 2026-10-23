@@ -1,0 +1,105 @@
+#  Build and test on every push and pull request. Nothing here talks to
+#  a live Urbit ship: the engine tests run ships on a simulated network,
+#  and the Go tests run fake ships on localhost.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: 0.15.2
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            zig: x86_64-linux
+          - os: macos-14
+            zig: aarch64-macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install zig
+        run: |
+          d=zig-${{ matrix.zig }}-$ZIG_VERSION
+          curl -fsSL "https://ziglang.org/download/$ZIG_VERSION/$d.tar.xz" | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$d" >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: zig-${{ matrix.os }}-${{ hashFiles('build.zig.zon', 'ext/**/build.zig.zon') }}
+
+      - name: Unit tests
+        run: zig build test -Dno-host=true
+
+      - name: Build the core (for the bindings)
+        run: zig build -Dno-host=true
+
+      - name: Unit tests under ASan and UBSan
+        if: runner.os == 'Linux'
+        run: test/sanitize.sh
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: bindings/go/go.mod
+          cache-dependency-path: bindings/go/go.sum
+
+      - name: Go binding
+        working-directory: bindings/go
+        run: |
+          go vet ./...
+          go test -race ./...
+
+      - name: Python binding
+        working-directory: bindings/python
+        run: |
+          so=$(ls "$GITHUB_WORKSPACE"/zig-out/lib/libmesa.so "$GITHUB_WORKSPACE"/zig-out/lib/libmesa.dylib 2>/dev/null | head -1)
+          LIBMESA="$so" python3 -I -c '
+          import sys; sys.path.insert(0, ".")
+          import libmesa as m
+          s = m.ship("~sampel-palnet")
+          assert m.ship_text(s) == "~sampel-palnet"
+          m.Identity.fake(m.ship("~zod"))
+          print("python binding ok")
+          '
+
+      - name: Install (ReleaseFast, with the host) and link against it
+        run: |
+          zig build -Doptimize=ReleaseFast -p "$RUNNER_TEMP/prefix"
+          test/install/check.sh "$RUNNER_TEMP/prefix"
+
+  #  the release targets, cross-compiled from Linux as release.yml does
+  cross:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-linux-gnu.2.28, x86_64-macos, aarch64-macos]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install zig
+        run: |
+          d=zig-x86_64-linux-$ZIG_VERSION
+          curl -fsSL "https://ziglang.org/download/$ZIG_VERSION/$d.tar.xz" | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$d" >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: zig-cross-${{ hashFiles('build.zig.zon', 'ext/**/build.zig.zon') }}
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.target }}
