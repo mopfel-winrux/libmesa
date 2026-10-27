@@ -6,6 +6,7 @@
 ::      [%idle dude]    suspend an agent (gall %idle)
 ::      [%revive desk]  restart a desk's agents (clay %zest, as |revive)
 ::      %germ       make /secret a %shut coop, with /secret/x 'treasure'
+::      [%grow-big n]  grow /big as n bytes of 'a' (case 1, 2, ...)
 ::      [%shut-read ship path]  %keen a %shut path of theirs (gall asks
 ::                              them for the key over /gk first)
 ::      anything    ack, and give a fact on /updates
@@ -47,6 +48,9 @@
     :~  [%pass /germ %germ /secret]
         [%pass /tend %tend /secret /x [%noun 'treasure']]
     ==
+  ?:  ?=([%grow-big @] q.vase)
+    :_  this
+    [%pass /grow %grow /big [%noun (fil 3 +.q.vase 'a')]]~
   ?:  ?=([%shut-read @ *] q.vase)
     =+  ;;([her=@p pax=path] +.q.vase)
     :_  this

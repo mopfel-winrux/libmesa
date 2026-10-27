@@ -447,9 +447,6 @@ _req_first(mesa_engine* eng, eng_peer* per_u, eng_req* req_u)
     else {
       _gauge_loss(per_u, req_u->sno_d, c3y);
     }
-    if ( !req_u->try_w ) {
-      req_u->rto_d = per_u->rto_d;   //  we know this path: time it
-    }
     req_u->wai_o = c3n;
     req_u->sen_d = eng->now_d;
     req_u->sno_d = ++per_u->snd_d;
