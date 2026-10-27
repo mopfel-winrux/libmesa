@@ -224,11 +224,13 @@ pub fn build(b: *std.Build) !void {
                 , .{ version, if (t.os.tag.isDarwin()) "-lpthread" else "-lpthread -ldl" }));
 
                 //  mesa-ping: poke a ship from the command line;
-                //  mesa-guestbook: an example application
+                //  mesa-guestbook: an example application;
+                //  mesa-bench: libmesa to libmesa over localhost
                 //
                 const tools = [_]struct { name: []const u8, file: []const u8 }{
                     .{ .name = "mesa-ping", .file = "tools/mesa-ping.c" },
                     .{ .name = "mesa-guestbook", .file = "examples/guestbook.c" },
+                    .{ .name = "mesa-bench", .file = "tools/mesa-bench.c" },
                 };
                 for (tools) |tl| {
                     const tool = b.addExecutable(.{

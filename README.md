@@ -272,7 +272,13 @@ zig build                      # zig-out/lib/, zig-out/bin/mesa-ping
 zig build test -Dno-host=true  # all unit tests, without building the host
 zig build -Doptimize=ReleaseFast -p /usr/local    # install
 zig build -Doptimize=ReleaseFast -Dtarget=aarch64-macos   # cross-compile
+zig build -Doptimize=ReleaseFast && zig-out/bin/mesa-bench -q   # benchmark
 ```
+
+`mesa-bench` runs two libmesa ships in two processes over UDP on
+localhost and measures poke round trips, poke throughput, large
+messages and remote scry (`-s dir` for SQLite stores, phase names to
+run only some).
 
 An install prefix is self-contained: headers, static archives,
 `libmesa.so`, and pkg-config files (`libmesa` for the shared library,
@@ -383,7 +389,7 @@ src/
   ship.{c,h}, util.c, compat.h, arena.h
   wire/         packets (pact.c), LSS (lss.c), bitsets: from vere
 include/mesa/   public headers
-tools/          mesa-ping, and the options it shares (cli.c)
+tools/          mesa-ping, mesa-bench, and the options they share (cli.c)
 docs/           guides (see Documentation)
 examples/       guestbook.c
 bindings/python/ libmesa.py (ctypes), tlon.py, examples/tlon_dms.py, tests
