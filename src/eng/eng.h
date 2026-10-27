@@ -32,6 +32,7 @@
 #define ENG_POINT_MS     3600000     //  re-resolve active peers' keys
 #define ENG_CACHE_MAX    (64u << 20) //  served-message cache, bytes
 #define ENG_ALIEN_MAX    4096        //  peers without keys, at once
+#define ENG_STASH_MAX    8           //  their pokes we keep, each
 #define ENG_IDLE_MS      600000      //  unload a quiet peer from memory
 #define ENG_GC_MS        60000       //  how often we look for them
 
@@ -65,6 +66,7 @@ typedef struct _eng_flow {
   c3_d      nex_d;           //  next seq to assign (starts at 1)
   c3_w      win_w;           //  send-window (max 1)
   eng_msg*  lod_u;           //  unacked messages, ascending seq
+  eng_msg*  lot_u;           //    the last
   //  rcv
   c3_d      las_d;           //  last-acked
   c3_o      pen_o;           //  pending-ack
@@ -91,9 +93,13 @@ typedef struct _eng_fetch {
   c3_d          nex_d;       //  next fragment to request
   c3_d          hav_d;       //  fragments verified (in order)
   c3_d          out_d;       //  in flight
+  c3_d          fas_d;       //  fast-loss cursor: next to check
+  c3_d*         rsn_d;       //  fragments re-requested, not yet back
+  c3_w          rsn_w, rsc_w;
   c3_y*         dat_y;       //  tob_d bytes
   c3_y*         got_y;       //  per-fragment: received
   c3_d*         sen_d;       //  per-fragment: last sent (ms)
+  c3_d*         sno_d;       //  per-fragment: last sent (peer send number)
   lss_pair*     par_u;       //  per-fragment pairs (for misordered)
   c3_y*         pap_y;       //  per-fragment: has pair
   lss_verifier  los_u;
@@ -115,11 +121,22 @@ typedef struct _eng_req {
   c3_d              nex_d;   //  next (re)send, ms
   c3_d              rto_d;
   c3_w              try_w;   //  sends so far
+  //  REQ_KEEN: the first request takes a slot in the peer's window
+  c3_o              wai_o;   //  waiting for a slot
+  c3_o              fly_o;   //  has one
+  c3_d              sen_d;   //  last sent (ms)
+  c3_d              sno_d;   //    (peer send number)
   //  fetch state, once we've heard the first page
   eng_fetch*        fet_u;
   c3_o              aut_o;   //  first page authenticated
   struct _eng_req*  nex_u;
+  struct _eng_req*  pre_u;
 } eng_req;
+
+#define NAME     eng_req_map
+#define KEY_TY   c3_c*         //  the request's pat_c
+#define VAL_TY   eng_req*
+#include "verstable.h"
 
 typedef struct _eng_peer eng_peer;
 
@@ -138,6 +155,15 @@ typedef struct {
   eng_ran* ran_u;
   c3_w     len_w, cap_w;
 } eng_crk;
+
+/* datagrams: outbound, released after commit; or kept to hear later
+*/
+typedef struct _eng_out {
+  mesa_lane        lan_u;
+  c3_z             len_z;
+  c3_y*            buf_y;
+  struct _eng_out* nex_u;
+} eng_out;
 
 struct _eng_peer {
   u3_ship       who_u;
@@ -177,9 +203,18 @@ struct _eng_peer {
   eng_crk       crk_u[4];    //  corked backward flows
   c3_d          use_d;       //  last looked up (ms), for unloading
   //  .pit
-  eng_req*      req_u;
+  eng_req*      req_u;       //  in order made
+  eng_req*      ret_u;       //    the last
+  eng_req_map   rem_u;       //    by path
   //  congestion (vere's u3_gage)
   c3_d          rtt_d, rtv_d, rto_d, wnd_d, wnf_d, sst_d;
+  c3_d          fly_d;       //  in the window: fragments, first requests
+  c3_d          snd_d;       //  requests sent (send numbers)
+  c3_d          rec_d;       //  loss recovery: losses of requests sent
+                             //  before this were already counted
+  //  pokes heard before we had their keys, to replay once we do
+  eng_out*      stl_u;
+  c3_w          stn_w;
 };
 
 #define NAME     eng_peer_map
@@ -211,7 +246,13 @@ typedef struct _eng_line {
   lss_pair*         par_u;   //  pairs, one per leaf
   c3_y*             pap_y;   //  per leaf: has pair
   struct _eng_line* nex_u;   //  eviction order
+  struct _eng_line* pre_u;
 } eng_line;
+
+#define NAME     eng_line_map
+#define KEY_TY   c3_c*         //  the line's pat_c
+#define VAL_TY   eng_line*
+#include "verstable.h"
 
 /* shut key: one of our group keys for a %shut namespace (+sy-plug)
 */
@@ -231,15 +272,6 @@ typedef struct _eng_wait {
   struct _eng_wait* nex_u;
 } eng_wait;
 
-/* outbound datagrams, released after commit
-*/
-typedef struct _eng_out {
-  mesa_lane        lan_u;
-  c3_z             len_z;
-  c3_y*            buf_y;
-  struct _eng_out* nex_u;
-} eng_out;
-
 struct mesa_engine {
   mesa_hooks    hok_u;
   mesa_store*   sto_u;
@@ -257,7 +289,11 @@ struct mesa_engine {
   //  state
   eng_peer_map  per_u;
   c3_w          ali_w;       //  peers without keys
+  const c3_y*   hea_y;       //  the datagram we're hearing, if any
+  c3_z          hea_z;
   eng_line*     lin_u;       //  served-message cache, oldest first
+  eng_line*     lit_u;       //    newest
+  eng_line_map  lim_u;       //    by path
   c3_d          lis_d;       //  cache bytes
   eng_wait*     wat_u;
   eng_shut*     shu_u;       //  our %shut keys, by kid ascending
@@ -360,6 +396,8 @@ eng_req*  eng_req_find(eng_peer* per_u, const c3_c* pat_c);
 eng_req*  eng_req_add(mesa_engine* eng, eng_peer* per_u, const c3_c* pat_c,
                       eng_req_e typ_e);
 void      eng_req_del(eng_peer* per_u, eng_req* req_u);
+void      eng_req_rename(eng_peer* per_u, eng_req* req_u, c3_c* pat_c);
+void      eng_req_clear(eng_peer* per_u);
 void      eng_req_free(eng_req* req_u);
 void      eng_req_send(mesa_engine* eng, eng_peer* per_u, eng_req* req_u);
 void      eng_hear_page(mesa_engine* eng, mesa_lane lan_u, u3_mesa_pact* pac_u);
@@ -383,6 +421,10 @@ c3_w      eng_cork_count(eng_peer* per_u);
 void      eng_cork_wipe(mesa_engine* eng, eng_peer* per_u);
 c3_c*     eng_flow_path(c3_d bon_d, const c3_c* lod_c, eng_dire dir_e,
                         u3_ship srv_u, c3_d seq_d);
+void      eng_hear_pact(mesa_engine* eng, mesa_lane from, const c3_y* buf,
+                        c3_z len);
+void      eng_peer_stash(mesa_engine* eng, eng_peer* per_u, mesa_lane lan_u);
+void      eng_flow_append(eng_flow* flo_u, eng_msg* msg_u);
 void      eng_flow_pump(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
                         mesa_noun msg);
 void      eng_flow_send(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u);

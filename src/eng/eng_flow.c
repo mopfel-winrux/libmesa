@@ -465,6 +465,17 @@ _is_cork_plea(mesa_noun msg)
   return ret_o;
 }
 
+/* eng_flow_append(): add [msg_u] to the end of the queue
+*/
+void
+eng_flow_append(eng_flow* flo_u, eng_msg* msg_u)
+{
+  msg_u->nex_u = 0;
+  if ( flo_u->lot_u ) flo_u->lot_u->nex_u = msg_u;
+  else                flo_u->lod_u = msg_u;
+  flo_u->lot_u = msg_u;
+}
+
 /* eng_flow_pump(): +pump, queue an outbound message (transfers [msg])
 */
 void
@@ -472,15 +483,12 @@ eng_flow_pump(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u,
               mesa_noun msg)
 {
   eng_msg*  msg_u = c3_calloc(sizeof(*msg_u));
-  eng_msg** end_u = &flo_u->lod_u;
   c3_y      key_y[40];
   c3_z      key_z;
 
   msg_u->seq_d = flo_u->nex_d++;
   msg_u->msg   = msg;
-
-  while ( *end_u ) end_u = &(*end_u)->nex_u;
-  *end_u = msg_u;
+  eng_flow_append(flo_u, msg_u);
 
   key_z = eng_key(KEY_LOAD, per_u->who_u, flo_u->bon_d, flo_u->dir_e,
                   msg_u->seq_d, key_y);
@@ -1004,7 +1012,8 @@ eng_hear_poke(mesa_engine* eng, mesa_lane lan_u, u3_mesa_pact* pac_u)
     else {
       eng_peer_ask(eng, per_u);
     }
-    return;   //  they'll resend
+    eng_peer_stash(eng, per_u, lan_u);   //  or they'll resend
+    return;
   }
 
   ack_c = c3_malloc(ack_u->pat_s + 1);
@@ -1142,7 +1151,7 @@ _pop(mesa_engine* eng, eng_peer* per_u, eng_flow* flo_u)
   mesa_noun msg   = msg_u->msg;
   c3_y      key_y[40];
 
-  flo_u->lod_u = msg_u->nex_u;
+  if ( !(flo_u->lod_u = msg_u->nex_u) ) flo_u->lot_u = 0;
   eng_del(eng, key_y, eng_key(KEY_LOAD, per_u->who_u, flo_u->bon_d,
                               flo_u->dir_e, msg_u->seq_d, key_y));
   c3_free(msg_u);

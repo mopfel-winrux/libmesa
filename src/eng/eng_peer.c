@@ -50,6 +50,7 @@ eng_peer_new(mesa_engine* eng, u3_ship who_u)
   per_u->aho_o = c3n;
   per_u->use_d = eng->now_d;
   eng_flow_map_init(&per_u->flo_u);
+  eng_req_map_init(&per_u->rem_u);
 
   //  congestion: vere's _init_gage, in ms
   //
@@ -228,10 +229,13 @@ eng_peer_free(eng_peer* per_u)
     c3_free(per_u->crk_u[i].ran_u);
   }
 
-  while ( per_u->req_u ) {
-    eng_req* nex_u = per_u->req_u->nex_u;
-    eng_req_free(per_u->req_u);
-    per_u->req_u = nex_u;
+  eng_req_clear(per_u);
+  eng_req_map_cleanup(&per_u->rem_u);
+  while ( per_u->stl_u ) {
+    eng_out* nex_u = per_u->stl_u->nex_u;
+    c3_free(per_u->stl_u->buf_y);
+    c3_free(per_u->stl_u);
+    per_u->stl_u = nex_u;
   }
   c3_free(per_u);
 }
@@ -513,20 +517,44 @@ eng_peer_breach(mesa_engine* eng, eng_peer* per_u)
 
   eng_cork_wipe(eng, per_u);
 
-  while ( per_u->req_u ) {
-    eng_req* nex_u = per_u->req_u->nex_u;
-
-    if ( (REQ_KEEN == per_u->req_u->typ_e) && eng->hok_u.sage ) {
+  for ( eng_req* req_u = per_u->req_u; req_u; req_u = req_u->nex_u ) {
+    if ( (REQ_KEEN == req_u->typ_e) && eng->hok_u.sage ) {
       mesa_ship her = { .lo = per_u->who_u[0], .hi = per_u->who_u[1] };
-      eng->hok_u.sage(eng->hok_u.ctx, her, per_u->req_u->key_c, MESA_NONE);
+      eng->hok_u.sage(eng->hok_u.ctx, her, req_u->key_c, MESA_NONE);
     }
-    eng_req_free(per_u->req_u);
-    per_u->req_u = nex_u;
   }
+  eng_req_clear(per_u);
 
   eng_sys_breach(eng, per_u);
   per_u->bon_d = 0;
   per_u->lan_o = c3n;
+}
+
+/* eng_peer_stash(): keep the datagram we're hearing from [per_u], whose
+**                   keys we don't have yet, to hear once we do (the
+**                   first few)
+*/
+void
+eng_peer_stash(mesa_engine* eng, eng_peer* per_u, mesa_lane lan_u)
+{
+  eng_out*  out_u;
+  eng_out** end_u = &per_u->stl_u;
+
+  if ( !eng->hea_y || (per_u->stn_w >= ENG_STASH_MAX) ) return;
+  for ( ; *end_u; end_u = &(*end_u)->nex_u ) {
+    if (  ((*end_u)->len_z == eng->hea_z)
+       && !memcmp((*end_u)->buf_y, eng->hea_y, eng->hea_z) )
+    {
+      return;   //  a resend
+    }
+  }
+  out_u = c3_calloc(sizeof(*out_u));
+  out_u->lan_u = lan_u;
+  out_u->len_z = eng->hea_z;
+  out_u->buf_y = c3_malloc(eng->hea_z);
+  memcpy(out_u->buf_y, eng->hea_y, eng->hea_z);
+  *end_u = out_u;
+  per_u->stn_w++;
 }
 
 /* eng_peer_known(): keys arrived; start anything that was waiting
@@ -542,6 +570,26 @@ eng_peer_known(mesa_engine* eng, eng_peer* per_u)
   eng_peer_save(eng, per_u);
   eng_req_rebase(eng, per_u);
   eng_flow_resume(eng, per_u);
+
+  //  hear what they sent before we knew them
+  //
+  if ( per_u->stl_u ) {
+    eng_out*    stl_u = per_u->stl_u;
+    const c3_y* hea_y = eng->hea_y;
+    c3_z        hea_z = eng->hea_z;
+
+    per_u->stl_u = 0;
+    per_u->stn_w = 0;
+    while ( stl_u ) {
+      eng_out* nex_u = stl_u->nex_u;
+      eng_hear_pact(eng, stl_u->lan_u, stl_u->buf_y, stl_u->len_z);
+      c3_free(stl_u->buf_y);
+      c3_free(stl_u);
+      stl_u = nex_u;
+    }
+    eng->hea_y = hea_y;
+    eng->hea_z = hea_z;
+  }
 }
 
 /* comets

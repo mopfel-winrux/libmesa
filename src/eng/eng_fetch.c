@@ -9,12 +9,16 @@
 eng_req*
 eng_req_find(eng_peer* per_u, const c3_c* pat_c)
 {
-  for ( eng_req* req_u = per_u->req_u; req_u; req_u = req_u->nex_u ) {
-    if ( 0 == strcmp(req_u->pat_c, pat_c) ) {
-      return req_u;
-    }
+  eng_req_map_itr itr_u = eng_req_map_get(&per_u->rem_u, (c3_c*)pat_c);
+  return eng_req_map_is_end(itr_u) ? 0 : itr_u.data->val;
+}
+
+static void
+_req_index(eng_peer* per_u, eng_req* req_u)
+{
+  if ( eng_req_map_is_end(eng_req_map_insert(&per_u->rem_u, req_u->pat_c, req_u)) ) {
+    mesa_fail(__FILE__, __LINE__, "out of memory");
   }
-  return 0;
 }
 
 eng_req*
@@ -22,7 +26,6 @@ eng_req_add(mesa_engine* eng, eng_peer* per_u, const c3_c* pat_c,
             eng_req_e typ_e)
 {
   eng_req* req_u = c3_calloc(sizeof(*req_u));
-  eng_req** end_u = &per_u->req_u;
 
   req_u->pat_c = strdup(pat_c);
   req_u->typ_e = typ_e;
@@ -30,10 +33,26 @@ eng_req_add(mesa_engine* eng, eng_peer* per_u, const c3_c* pat_c,
   req_u->rto_d = ENG_RTO_MIN;
   req_u->aut_o = c3n;
   req_u->shu_o = c3n;
+  req_u->wai_o = c3n;
+  req_u->fly_o = c3n;
 
-  while ( *end_u ) end_u = &(*end_u)->nex_u;
-  *end_u = req_u;
+  req_u->pre_u = per_u->ret_u;
+  if ( per_u->ret_u ) per_u->ret_u->nex_u = req_u;
+  else                per_u->req_u = req_u;
+  per_u->ret_u = req_u;
+  _req_index(per_u, req_u);
   return req_u;
+}
+
+/* eng_req_rename(): change [req_u]'s path (takes [pat_c])
+*/
+void
+eng_req_rename(eng_peer* per_u, eng_req* req_u, c3_c* pat_c)
+{
+  eng_req_map_erase(&per_u->rem_u, req_u->pat_c);
+  c3_free(req_u->pat_c);
+  req_u->pat_c = pat_c;
+  _req_index(per_u, req_u);
 }
 
 static void
@@ -43,10 +62,28 @@ _fetch_free(eng_fetch* fet_u)
     c3_free(fet_u->dat_y);
     c3_free(fet_u->got_y);
     c3_free(fet_u->sen_d);
+    c3_free(fet_u->sno_d);
+    c3_free(fet_u->rsn_d);
     c3_free(fet_u->par_u);
     c3_free(fet_u->pap_y);
     arena_free(&fet_u->are_u);
     c3_free(fet_u);
+  }
+}
+
+/* _req_reset(): drop [req_u]'s download and its slots in the window
+*/
+static void
+_req_reset(eng_peer* per_u, eng_req* req_u)
+{
+  if ( req_u->fet_u ) {
+    per_u->fly_d -= c3_min(per_u->fly_d, req_u->fet_u->out_d);
+    _fetch_free(req_u->fet_u);
+    req_u->fet_u = 0;
+  }
+  if ( c3y == req_u->fly_o ) {
+    req_u->fly_o = c3n;
+    if ( per_u->fly_d ) per_u->fly_d--;
   }
 }
 
@@ -64,15 +101,28 @@ eng_req_free(eng_req* req_u)
 void
 eng_req_del(eng_peer* per_u, eng_req* req_u)
 {
-  eng_req** cur_u = &per_u->req_u;
+  _req_reset(per_u, req_u);
+  eng_req_map_erase(&per_u->rem_u, req_u->pat_c);
+  if ( req_u->pre_u ) req_u->pre_u->nex_u = req_u->nex_u;
+  else                per_u->req_u = req_u->nex_u;
+  if ( req_u->nex_u ) req_u->nex_u->pre_u = req_u->pre_u;
+  else                per_u->ret_u = req_u->pre_u;
+  req_u->nex_u = req_u->pre_u = 0;
+}
 
-  while ( *cur_u ) {
-    if ( *cur_u == req_u ) {
-      *cur_u = req_u->nex_u;
-      return;
-    }
-    cur_u = &(*cur_u)->nex_u;
+/* eng_req_clear(): forget all of [per_u]'s requests
+*/
+void
+eng_req_clear(eng_peer* per_u)
+{
+  while ( per_u->req_u ) {
+    eng_req* nex_u = per_u->req_u->nex_u;
+    eng_req_free(per_u->req_u);
+    per_u->req_u = nex_u;
   }
+  per_u->ret_u = 0;
+  per_u->fly_d = 0;
+  eng_req_map_clear(&per_u->rem_u);
 }
 
 /* _name(): a name in [per_u]'s namespace
@@ -189,60 +239,76 @@ _gauge_ack(eng_peer* per_u, c3_d sen_d, c3_d now_d)
   per_u->rtv_d = (err_d + (per_u->rtv_d * 7)) >> 3;
 }
 
+/* _gauge_loss(): a request we sent as [sno_d] was lost. Cut the window
+**                once per round: not again for losses of requests sent
+**                before the cut (NewReno's recovery point).
+*/
 static void
-_gauge_loss(eng_peer* per_u)
+_gauge_loss(eng_peer* per_u, c3_d sno_d, c3_o tim_o)
 {
+  if ( sno_d <= per_u->rec_d ) {
+    return;
+  }
+  per_u->rec_d = per_u->snd_d;
   per_u->sst_d = c3_max(1, per_u->wnd_d / 2);
   per_u->wnd_d = per_u->sst_d;
-  per_u->rto_d = _clamp_rto(per_u->rto_d * 2);
-}
-
-/* _flying(): fragments in flight from [per_u], all downloads together
-*/
-static c3_d
-_flying(eng_peer* per_u)
-{
-  c3_d out_d = 0;
-
-  for ( eng_req* req_u = per_u->req_u; req_u; req_u = req_u->nex_u ) {
-    if ( req_u->fet_u ) out_d += req_u->fet_u->out_d;
+  if ( c3y == tim_o ) {
+    per_u->rto_d = _clamp_rto(per_u->rto_d * 2);
   }
-  return out_d;
 }
 
-/* _fetch_pump(): request fragments while the window is open
+/* _send_frag(): request fragment [fag_d] of [req_u]'s download
+*/
+static void
+_send_frag(mesa_engine* eng, eng_peer* per_u, eng_req* req_u, c3_d fag_d)
+{
+  eng_fetch* fet_u = req_u->fet_u;
+
+  fet_u->sen_d[fag_d] = eng->now_d;
+  fet_u->sno_d[fag_d] = ++per_u->snd_d;
+  _send_peek(eng, per_u, req_u->pat_c, c3n, fag_d);
+}
+
+static void _req_first(mesa_engine* eng, eng_peer* per_u, eng_req* req_u);
+static void _first_fast(mesa_engine* eng, eng_peer* per_u, c3_d sno_d);
+static void _fetch_again(mesa_engine* eng, eng_peer* per_u, eng_req* req_u,
+                         c3_d fag_d);
+
+/* _fetch_pump(): request fragments, and start scries, while the window
+**                is open
 **
-**   The window is the peer's, shared by all our downloads from them (one
+**   The window is the peer's, shared by all our requests to them (one
 **   path between us), round-robin, a fragment each per round.
 */
 static void
 _fetch_pump(mesa_engine* eng, eng_peer* per_u)
 {
-  c3_d out_d = _flying(per_u);
   c3_o pro_o = c3y;
 
-  while ( (c3y == pro_o) && (out_d < per_u->wnd_d) ) {
+  while ( (c3y == pro_o) && (per_u->fly_d < per_u->wnd_d) ) {
     pro_o = c3n;
 
     for ( eng_req* req_u = per_u->req_u;
-          req_u && (out_d < per_u->wnd_d);
+          req_u && (per_u->fly_d < per_u->wnd_d);
           req_u = req_u->nex_u )
     {
       eng_fetch* fet_u = req_u->fet_u;
-      c3_d       fag_d;
 
+      if ( c3y == req_u->wai_o ) {
+        _req_first(eng, per_u, req_u);
+        pro_o = c3y;
+        continue;
+      }
       if ( !fet_u ) continue;
       while ( (fet_u->nex_d < fet_u->tof_d) && fet_u->got_y[fet_u->nex_d] ) {
         fet_u->nex_d++;
       }
       if ( fet_u->nex_d >= fet_u->tof_d ) continue;
 
-      fag_d = fet_u->nex_d++;
-      fet_u->sen_d[fag_d] = eng->now_d;
       fet_u->out_d++;
-      out_d++;
+      per_u->fly_d++;
       pro_o = c3y;
-      _send_peek(eng, per_u, req_u->pat_c, c3n, fag_d);
+      _send_frag(eng, per_u, req_u, fet_u->nex_d++);
     }
   }
 
@@ -259,22 +325,161 @@ static void
 _fetch_resend(mesa_engine* eng, eng_peer* per_u, eng_req* req_u)
 {
   eng_fetch* fet_u = req_u->fet_u;
-  c3_o       los_o = c3n;
 
   for ( c3_d i = fet_u->hav_d; i < fet_u->nex_d; i++ ) {
     if (  !fet_u->got_y[i]
        && (eng->now_d >= fet_u->sen_d[i] + per_u->rto_d) )
     {
-      los_o = c3y;
-      fet_u->sen_d[i] = eng->now_d;
-      _send_peek(eng, per_u, req_u->pat_c, c3n, i);
+      _gauge_loss(per_u, fet_u->sno_d[i], c3y);
+      _fetch_again(eng, per_u, req_u, i);
     }
-  }
-  if ( c3y == los_o ) {
-    _gauge_loss(per_u);
   }
   req_u->nex_d = eng->now_d + per_u->rto_d;
   _fetch_pump(eng, per_u);
+}
+
+/* _overtaken(): is a request we sent as [old_d] lost, now that the one
+**               we sent as [sno_d] has come back? Yes once three sent
+**               after it have (the path reorders little), or one has
+**               and fewer than three were (its tail, which would
+**               otherwise wait for the timer).
+*/
+static c3_o
+_overtaken(eng_peer* per_u, c3_d old_d, c3_d sno_d)
+{
+  return __((old_d < sno_d) && (  (old_d + 3 <= sno_d)
+                               || (per_u->snd_d < old_d + 3)));
+}
+
+/* _fetch_again(): request fragment [fag_d] again, and watch that too
+*/
+static void
+_fetch_again(mesa_engine* eng, eng_peer* per_u, eng_req* req_u, c3_d fag_d)
+{
+  eng_fetch* fet_u = req_u->fet_u;
+  c3_w       i_w;
+
+  _send_frag(eng, per_u, req_u, fag_d);
+
+  for ( i_w = 0; i_w < fet_u->rsn_w; i_w++ ) {
+    if ( fet_u->rsn_d[i_w] == fag_d ) return;
+  }
+  if ( fet_u->rsn_w == fet_u->rsc_w ) {
+    fet_u->rsc_w = c3_max(8, 2 * fet_u->rsc_w);
+    fet_u->rsn_d = c3_realloc(fet_u->rsn_d, fet_u->rsc_w * sizeof(c3_d));
+  }
+  fet_u->rsn_d[fet_u->rsn_w++] = fag_d;
+}
+
+/* _fetch_fast(): ask again now for fragments that later requests have
+**                overtaken, instead of waiting for the timer: those we
+**                asked for again, then new ones in order
+*/
+static void
+_fetch_fast(mesa_engine* eng, eng_peer* per_u, eng_req* req_u, c3_d sno_d)
+{
+  eng_fetch* fet_u = req_u->fet_u;
+  c3_d       i;
+
+  for ( c3_w i_w = 0; i_w < fet_u->rsn_w; ) {
+    c3_d fag_d = fet_u->rsn_d[i_w];
+
+    if ( fet_u->got_y[fag_d] ) {
+      fet_u->rsn_d[i_w] = fet_u->rsn_d[--fet_u->rsn_w];
+      continue;
+    }
+    if ( c3y == _overtaken(per_u, fet_u->sno_d[fag_d], sno_d) ) {
+      _gauge_loss(per_u, fet_u->sno_d[fag_d], c3n);
+      _send_frag(eng, per_u, req_u, fag_d);
+    }
+    i_w++;
+  }
+
+  for ( i = c3_max(fet_u->fas_d, fet_u->hav_d); i < fet_u->nex_d; i++ ) {
+    if ( fet_u->got_y[i] ) continue;
+    if ( c3n == _overtaken(per_u, fet_u->sno_d[i], sno_d) ) break;
+    _gauge_loss(per_u, fet_u->sno_d[i], c3n);
+    _fetch_again(eng, per_u, req_u, i);
+  }
+  fet_u->fas_d = i;
+}
+
+/* _first_fast(): the same for scries' first requests, in the order we
+**                made them (resends, sent later, don't stop the scan)
+*/
+static void
+_first_fast(mesa_engine* eng, eng_peer* per_u, c3_d sno_d)
+{
+  for ( eng_req* req_u = per_u->req_u; req_u; req_u = req_u->nex_u ) {
+    if ( c3n == req_u->fly_o ) continue;
+    if ( c3y == _overtaken(per_u, req_u->sno_d, sno_d) ) {
+      _gauge_loss(per_u, req_u->sno_d, c3n);
+      req_u->sen_d = eng->now_d;
+      req_u->sno_d = ++per_u->snd_d;
+      req_u->try_w++;
+      req_u->nex_d = eng->now_d + req_u->rto_d;
+      _send_peek(eng, per_u, req_u->pat_c, c3y, 0);
+    }
+    else if ( 1 == req_u->try_w ) {
+      break;
+    }
+  }
+}
+
+/* _req_first(): send a request's first page request
+*/
+static void
+_req_first(mesa_engine* eng, eng_peer* per_u, eng_req* req_u)
+{
+  //  a scry waits for a slot in the window; once it has one it keeps
+  //  it until the first page comes back
+  //
+  if ( REQ_KEEN == req_u->typ_e ) {
+    if ( c3n == req_u->fly_o ) {
+      if ( per_u->fly_d >= per_u->wnd_d ) {
+        req_u->wai_o = c3y;
+        req_u->nex_d = UINT64_MAX;
+        return;
+      }
+      req_u->fly_o = c3y;
+      per_u->fly_d++;
+    }
+    else {
+      _gauge_loss(per_u, req_u->sno_d, c3y);
+    }
+    if ( !req_u->try_w ) {
+      req_u->rto_d = per_u->rto_d;   //  we know this path: time it
+    }
+    req_u->wai_o = c3n;
+    req_u->sen_d = eng->now_d;
+    req_u->sno_d = ++per_u->snd_d;
+  }
+
+  if ( REQ_ACK == req_u->typ_e ) {
+    _send_poke(eng, per_u, req_u);
+  }
+  else {
+    _send_peek(eng, per_u, req_u->pat_c, c3y, 0);
+  }
+
+  req_u->nex_d = eng->now_d + req_u->rto_d;
+  req_u->rto_d = c3_min(req_u->rto_d * 2, ENG_RTO_MAX);
+  req_u->try_w++;
+}
+
+/* _req_landed(): the first page of [req_u] came back
+*/
+static void
+_req_landed(mesa_engine* eng, eng_peer* per_u, eng_req* req_u)
+{
+  if ( c3y == req_u->fly_o ) {
+    req_u->fly_o = c3n;
+    if ( per_u->fly_d ) per_u->fly_d--;
+    if ( 1 == req_u->try_w ) {   //  (Karn: no samples from resends)
+      _gauge_ack(per_u, req_u->sen_d, eng->now_d);
+    }
+    _first_fast(eng, per_u, req_u->sno_d);
+  }
 }
 
 /* eng_req_send(): (re)send a request
@@ -292,17 +497,7 @@ eng_req_send(mesa_engine* eng, eng_peer* per_u, eng_req* req_u)
     _fetch_resend(eng, per_u, req_u);
     return;
   }
-
-  if ( REQ_ACK == req_u->typ_e ) {
-    _send_poke(eng, per_u, req_u);
-  }
-  else {
-    _send_peek(eng, per_u, req_u->pat_c, c3y, 0);
-  }
-
-  req_u->nex_d = eng->now_d + req_u->rto_d;
-  req_u->rto_d = c3_min(req_u->rto_d * 2, ENG_RTO_MAX);
-  req_u->try_w++;
+  _req_first(eng, per_u, req_u);
 }
 
 void
@@ -403,6 +598,7 @@ _fetch_init(mesa_engine* eng, eng_peer* per_u, eng_req* req_u,
   fet_u->dat_y = c3_calloc(fet_u->tob_d);
   fet_u->got_y = c3_calloc(tof_d);
   fet_u->sen_d = c3_calloc(tof_d * sizeof(c3_d));
+  fet_u->sno_d = c3_calloc(tof_d * sizeof(c3_d));
   fet_u->par_u = c3_calloc(tof_d * sizeof(lss_pair));
   fet_u->pap_y = c3_calloc(tof_d);
   fet_u->are_u = arena_create(64 * (c3_bits_half((c3_h)tof_d) + 2));
@@ -441,8 +637,17 @@ _fetch_take(mesa_engine* eng, eng_peer* per_u, eng_req* req_u,
     fet_u->pap_y[fag_d] = 1;
   }
   fet_u->got_y[fag_d] = 1;
-  if ( fet_u->out_d ) fet_u->out_d--;
+  if ( fet_u->out_d ) {
+    fet_u->out_d--;
+    if ( per_u->fly_d ) per_u->fly_d--;
+  }
   _gauge_ack(per_u, fet_u->sen_d[fag_d], eng->now_d);
+
+  //  every download from them shares the path this came over
+  //
+  for ( eng_req* fas_u = per_u->req_u; fas_u; fas_u = fas_u->nex_u ) {
+    if ( fas_u->fet_u ) _fetch_fast(eng, per_u, fas_u, fet_u->sno_d[fag_d]);
+  }
 
   //  verify everything we now have in order
   //
@@ -459,8 +664,7 @@ _fetch_take(mesa_engine* eng, eng_peer* per_u, eng_req* req_u,
       //
       mesa_log("mesa: %s: fragment %" PRIu64 " failed verification",
                eng_ship_text(per_u->who_u), i);
-      _fetch_free(fet_u);
-      req_u->fet_u = 0;
+      _req_reset(per_u, req_u);
       req_u->aut_o = c3n;
       req_u->nex_d = eng->now_d + per_u->rto_d;
       return;
@@ -565,7 +769,9 @@ eng_hear_page(mesa_engine* eng, mesa_lane lan_u, u3_mesa_pact* pac_u)
                  eng_ship_text(per_u->who_u));
         return;
       }
+      _req_landed(eng, per_u, req_u);
       _req_done(eng, per_u, req_u, dat_u->len_h, dat_u->fra_y);
+      _fetch_pump(eng, per_u);
       return;
     }
 
@@ -592,6 +798,7 @@ eng_hear_page(mesa_engine* eng, mesa_lane lan_u, u3_mesa_pact* pac_u)
         return;
       }
       req_u->aut_o = c3y;
+      _req_landed(eng, per_u, req_u);
       _fetch_init(eng, per_u, req_u, dat_u, pof_u, pon_d);
       c3_free(pof_u);
       return;
@@ -630,10 +837,9 @@ eng_req_rebase(mesa_engine* eng, eng_peer* per_u)
 
     switch ( req_u->typ_e ) {
       case REQ_KEEN: {
-        c3_free(req_u->pat_c);
-        req_u->pat_c = eng_keen_path(per_u, req_u);
-        _fetch_free(req_u->fet_u);
-        req_u->fet_u = 0;
+        _req_reset(per_u, req_u);
+        eng_req_rename(per_u, req_u, eng_keen_path(per_u, req_u));
+        req_u->wai_o = c3n;
         req_u->aut_o = c3n;
         req_u->nex_d = eng->now_d;
         req_u->rto_d = ENG_RTO_MIN;

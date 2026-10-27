@@ -65,18 +65,17 @@ _uv_digit(c3_c c)
   return -1;
 }
 
+/* _bits_at(): [wid_w] (at most 8) bits at bit [bit_z], LSB first
+*/
 static c3_y
 _bits_at(c3_z len_z, const c3_y* buf_y, c3_z bit_z, c3_w wid_w)
 {
-  c3_y out_y = 0;
+  c3_z i_z = bit_z >> 3;
+  c3_w two_w;
 
-  for ( c3_w b = 0; b < wid_w; b++ ) {
-    c3_z i_z = bit_z + b;
-    if ( (i_z < len_z * 8) && (buf_y[i_z >> 3] & (1 << (i_z & 7))) ) {
-      out_y |= (1 << b);
-    }
-  }
-  return out_y;
+  if ( i_z >= len_z ) return 0;
+  two_w = buf_y[i_z] | ((i_z + 1 < len_z) ? (buf_y[i_z + 1] << 8) : 0);
+  return (c3_y)((two_w >> (bit_z & 7)) & ((1u << wid_w) - 1));
 }
 
 c3_c*
@@ -137,13 +136,15 @@ knot_uv_parse(c3_z len_z, const c3_c* txt_c, c3_z* out_z)
 
   for ( c3_z i_z = len_z; i_z-- > 2; ) {
     c3_ys dig = _uv_digit(txt_c[i_z]);
+    c3_w  two_w;
 
     if ( dig < 0 ) continue;
-    for ( c3_w b = 0; b < 5; b++, bit_z++ ) {
-      if ( dig & (1 << b) ) {
-        buf_y[bit_z >> 3] |= (c3_y)(1 << (bit_z & 7));
-      }
+    two_w = (c3_w)dig << (bit_z & 7);
+    buf_y[bit_z >> 3] |= (c3_y)two_w;
+    if ( (two_w >> 8) && ((bit_z >> 3) + 1 < cap_z) ) {
+      buf_y[(bit_z >> 3) + 1] |= (c3_y)(two_w >> 8);
     }
+    bit_z += 5;
   }
 
   //  canonical form only

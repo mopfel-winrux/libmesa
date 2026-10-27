@@ -28,7 +28,9 @@ eng_cache_free(mesa_engine* eng)
     _line_free(eng->lin_u);
     eng->lin_u = nex_u;
   }
+  eng->lit_u = 0;
   eng->lis_d = 0;
+  eng_line_map_clear(&eng->lim_u);
 
   while ( eng->wat_u ) {
     eng_wait* nex_u = eng->wat_u->nex_u;
@@ -38,41 +40,46 @@ eng_cache_free(mesa_engine* eng)
   }
 }
 
+static void
+_cache_cut(mesa_engine* eng, eng_line* del_u)
+{
+  eng_line_map_erase(&eng->lim_u, del_u->pat_c);
+  if ( del_u->pre_u ) del_u->pre_u->nex_u = del_u->nex_u;
+  else                eng->lin_u = del_u->nex_u;
+  if ( del_u->nex_u ) del_u->nex_u->pre_u = del_u->pre_u;
+  else                eng->lit_u = del_u->pre_u;
+  eng->lis_d -= del_u->tob_d;
+  _line_free(del_u);
+}
+
 void
 eng_cache_drop(mesa_engine* eng, const c3_c* pat_c)
 {
-  eng_line** lin_u = &eng->lin_u;
+  eng_line_map_itr itr_u = eng_line_map_get(&eng->lim_u, (c3_c*)pat_c);
 
-  while ( *lin_u ) {
-    if ( 0 == strcmp((*lin_u)->pat_c, pat_c) ) {
-      eng_line* del_u = *lin_u;
-      *lin_u = del_u->nex_u;
-      eng->lis_d -= del_u->tob_d;
-      _line_free(del_u);
-      return;
-    }
-    lin_u = &(*lin_u)->nex_u;
+  if ( !eng_line_map_is_end(itr_u) ) {
+    _cache_cut(eng, itr_u.data->val);
   }
 }
 
 static void
 _cache_put(mesa_engine* eng, eng_line* lin_u)
 {
-  eng_line** end_u = &eng->lin_u;
-
   //  evict oldest first
   //
   while ( eng->lin_u && (eng->lis_d + lin_u->tob_d > ENG_CACHE_MAX) ) {
-    eng_line* old_u = eng->lin_u;
-    eng->lin_u = old_u->nex_u;
-    eng->lis_d -= old_u->tob_d;
-    _line_free(old_u);
+    _cache_cut(eng, eng->lin_u);
   }
 
-  while ( *end_u ) end_u = &(*end_u)->nex_u;
   lin_u->nex_u = 0;
-  *end_u = lin_u;
+  lin_u->pre_u = eng->lit_u;
+  if ( eng->lit_u ) eng->lit_u->nex_u = lin_u;
+  else              eng->lin_u = lin_u;
+  eng->lit_u = lin_u;
   eng->lis_d += lin_u->tob_d;
+  if ( eng_line_map_is_end(eng_line_map_insert(&eng->lim_u, lin_u->pat_c, lin_u)) ) {
+    mesa_fail(__FILE__, __LINE__, "out of memory");
+  }
 }
 
 /* _line_build(): fragment and hash a message
@@ -452,12 +459,11 @@ _line_make(mesa_engine* eng, const c3_c* pat_c)
 eng_line*
 eng_line_get(mesa_engine* eng, const c3_c* pat_c)
 {
-  eng_line* lin_u;
+  eng_line*        lin_u;
+  eng_line_map_itr itr_u = eng_line_map_get(&eng->lim_u, (c3_c*)pat_c);
 
-  for ( lin_u = eng->lin_u; lin_u; lin_u = lin_u->nex_u ) {
-    if ( 0 == strcmp(lin_u->pat_c, pat_c) ) {
-      return lin_u;
-    }
+  if ( !eng_line_map_is_end(itr_u) ) {
+    return itr_u.data->val;
   }
 
   if ( !(lin_u = _line_make(eng, pat_c)) ) {

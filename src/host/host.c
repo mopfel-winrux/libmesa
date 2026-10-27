@@ -13,6 +13,7 @@
 #include <uv.h>
 
 #define HOST_DNS_MS   (5 * 60 * 1000)   //  refresh galaxy addresses
+#define HOST_SOCK_BUF (8 << 20)         //  UDP socket buffers, bytes
 
 typedef struct _host_need {
   mesa_ship          who;
@@ -40,6 +41,8 @@ struct mesa_host {
   uv_udp_t        wax_u;
   uv_timer_t      tim_u;
   uv_idle_t       idl_u;
+  uv_check_t      chk_u;      //  after each round of I/O: re-arm the timer
+  c3_o            kic_o;      //    if we heard anything
   c3_o            fak_o;
   c3_o            trc_o;      //  $MESA_TRACE: log every datagram
   c3_c*           azi_c;
@@ -186,11 +189,24 @@ _host_send(void* ctx, mesa_lane lan_u, const uint8_t* buf_y, size_t len_z)
   uv_udp_try_send(&hos_u->wax_u, &buf_u, 1, (const struct sockaddr*)&add_u);
 }
 
+/* receiving: up to 32 datagrams per read (recvmmsg, where there is one)
+*/
 static void
 _host_alloc_cb(uv_handle_t* han_u, size_t len_z, uv_buf_t* buf_u)
 {
-  static c3_c buf_c[2048];
+  static c3_c buf_c[32 * 2048];
   *buf_u = uv_buf_init(buf_c, sizeof(buf_c));
+}
+
+static void
+_host_check_cb(uv_check_t* chk_u)
+{
+  mesa_host* hos_u = chk_u->data;
+
+  if ( c3y == hos_u->kic_o ) {
+    hos_u->kic_o = c3n;
+    mesa_host_kick(hos_u);
+  }
 }
 
 static void
@@ -214,7 +230,7 @@ _host_recv_cb(uv_udp_t* wax_u, ssize_t nrd_i, const uv_buf_t* buf_u,
     }
     mesa_engine_hear(hos_u->eng_u, lan_u, (const uint8_t*)buf_u->base,
                      (size_t)nrd_i, _now());
-    mesa_host_kick(hos_u);
+    hos_u->kic_o = c3y;
   }
 }
 
@@ -586,17 +602,30 @@ mesa_host_open(const mesa_host_config* cfg, mesa_host** out)
   add_u.sin_addr.s_addr = htonl(( c3y == hos_u->fak_o ) ? 0x7f000001 : INADDR_ANY);
   add_u.sin_port = htons(por_s);
 
-  uv_udp_init(hos_u->lup_u, &hos_u->wax_u);
+  uv_udp_init_ex(hos_u->lup_u, &hos_u->wax_u, AF_INET | UV_UDP_RECVMMSG);
   hos_u->wax_u.data = hos_u;
   uv_timer_init(hos_u->lup_u, &hos_u->tim_u);
   hos_u->tim_u.data = hos_u;
   uv_idle_init(hos_u->lup_u, &hos_u->idl_u);
   hos_u->idl_u.data = hos_u;
+  uv_check_init(hos_u->lup_u, &hos_u->chk_u);
+  hos_u->chk_u.data = hos_u;
+  uv_check_start(&hos_u->chk_u, _host_check_cb);
+  uv_unref((uv_handle_t*)&hos_u->chk_u);
 
   if ( uv_udp_bind(&hos_u->wax_u, (const struct sockaddr*)&add_u, 0) ) {
     mesa_log("mesa: can't bind udp port %u", por_s);
     ret_i = MESA_HOST_E_SOCKET;
     goto fail_uv;
+  }
+  //  room for a full window of fragments arriving at once (the kernel
+  //  caps it at net.core.rmem_max / wmem_max)
+  //
+  {
+    int siz_i = HOST_SOCK_BUF;
+    uv_recv_buffer_size((uv_handle_t*)&hos_u->wax_u, &siz_i);
+    siz_i = HOST_SOCK_BUF;
+    uv_send_buffer_size((uv_handle_t*)&hos_u->wax_u, &siz_i);
   }
   if ( MESA_OK != (ret_i = mesa_engine_open(&con_u, &hos_u->eng_u)) ) {
     goto fail_uv;
@@ -616,6 +645,7 @@ fail_uv:
   uv_close((uv_handle_t*)&hos_u->wax_u, 0);
   uv_close((uv_handle_t*)&hos_u->tim_u, 0);
   uv_close((uv_handle_t*)&hos_u->idl_u, 0);
+  uv_close((uv_handle_t*)&hos_u->chk_u, 0);
   uv_run(hos_u->lup_u, UV_RUN_NOWAIT);
 
 fail:
@@ -657,6 +687,7 @@ mesa_host_close(mesa_host* hos_u)
   uv_close((uv_handle_t*)&hos_u->wax_u, 0);
   uv_close((uv_handle_t*)&hos_u->tim_u, 0);
   uv_close((uv_handle_t*)&hos_u->idl_u, 0);
+  uv_close((uv_handle_t*)&hos_u->chk_u, 0);
   uv_run(hos_u->lup_u, UV_RUN_NOWAIT);
 
   while ( hos_u->ned_u ) {

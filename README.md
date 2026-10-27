@@ -278,7 +278,9 @@ zig build -Doptimize=ReleaseFast && zig-out/bin/mesa-bench -q   # benchmark
 `mesa-bench` runs two libmesa ships in two processes over UDP on
 localhost and measures poke round trips, poke throughput, large
 messages and remote scry (`-s dir` for SQLite stores, phase names to
-run only some).
+run only some). The host asks the kernel for 8 MB socket buffers, which
+Linux caps at `net.core.rmem_max` and `wmem_max` (often 208 KB):
+raise those for fewer drops on bulk transfers.
 
 An install prefix is self-contained: headers, static archives,
 `libmesa.so`, and pkg-config files (`libmesa` for the shared library,

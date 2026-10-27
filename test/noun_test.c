@@ -170,6 +170,80 @@ _test_roundtrip(void)
   }
 }
 
+/* _test_big(): [small big] jams bit for bit as a plain bit writer
+**              would (big atoms at every bit offset), and cues back
+*/
+typedef struct { c3_y* buf_y; c3_d pos_d; } _ref_w;
+
+static void
+_ref_bit(_ref_w* ref_u, c3_y bit_y)
+{
+  if ( bit_y ) ref_u->buf_y[ref_u->pos_d >> 3] |= (c3_y)(1 << (ref_u->pos_d & 7));
+  ref_u->pos_d++;
+}
+
+static void
+_ref_mat(_ref_w* ref_u, c3_z len_z, const c3_y* buf_y)
+{
+  c3_d b_d = 0, c_d = 0;
+
+  for ( c3_d i_d = 0; i_d < (c3_d)len_z * 8; i_d++ ) {
+    if ( (buf_y[i_d >> 3] >> (i_d & 7)) & 1 ) b_d = i_d + 1;
+  }
+  if ( !b_d ) { _ref_bit(ref_u, 1); return; }
+  for ( c3_d t_d = b_d; t_d; t_d >>= 1 ) c_d++;
+  for ( c3_d i_d = 0; i_d < c_d; i_d++ ) _ref_bit(ref_u, 0);
+  _ref_bit(ref_u, 1);
+  for ( c3_d i_d = 0; i_d + 1 < c_d; i_d++ ) _ref_bit(ref_u, (b_d >> i_d) & 1);
+  for ( c3_d i_d = 0; i_d < b_d; i_d++ ) {
+    _ref_bit(ref_u, (buf_y[i_d >> 3] >> (i_d & 7)) & 1);
+  }
+}
+
+static void
+_test_big(void)
+{
+  for ( c3_w i_w = 0; i_w < 2000; i_w++ ) {
+    c3_y      sma_y[2] = { (c3_y)rand(), (c3_y)(rand() & 0x3f) };
+    c3_z      len_z    = 9 + (rand() % 600);
+    c3_y*     big_y    = c3_malloc(len_z);
+    _ref_w    ref_u;
+    c3_z      jaz_z;
+    c3_y*     jam_y;
+    mesa_noun som, cue;
+
+    for ( c3_z j_z = 0; j_z < len_z; j_z++ ) big_y[j_z] = (c3_y)rand();
+    big_y[len_z - 1] |= 1;
+    som = mesa_cell(mesa_atom_bytes(2, sma_y), mesa_atom_bytes(len_z, big_y));
+
+    ref_u.buf_y = c3_calloc(len_z + 64);
+    ref_u.pos_d = 0;
+    _ref_bit(&ref_u, 1);
+    _ref_bit(&ref_u, 0);
+    _ref_bit(&ref_u, 0);
+    _ref_mat(&ref_u, 2, sma_y);
+    _ref_bit(&ref_u, 0);
+    _ref_mat(&ref_u, len_z, big_y);
+
+    jam_y = mesa_jam_bytes(som, &jaz_z);
+    if ( (jaz_z != ((ref_u.pos_d + 7) >> 3)) || memcmp(jam_y, ref_u.buf_y, jaz_z) ) {
+      fprintf(stderr, "noun: big jam %u differs\r\n", i_w);
+      ret_i = 1;
+    }
+    cue = mesa_cue_bytes(jaz_z, jam_y);
+    if ( (MESA_NONE == cue) || !mesa_eq(som, cue) ) {
+      fprintf(stderr, "noun: big roundtrip %u failed\r\n", i_w);
+      ret_i = 1;
+    }
+    if ( MESA_NONE != cue ) mesa_unref(cue);
+    mesa_unref(som);
+    c3_free(jam_y);
+    c3_free(ref_u.buf_y);
+    c3_free(big_y);
+    if ( ret_i ) return;
+  }
+}
+
 static void
 _test_deep(void)
 {
@@ -252,6 +326,8 @@ main()
   _test_at();
   fprintf(stderr, "noun: roundtrip\r\n");
   _test_roundtrip();
+  fprintf(stderr, "noun: big atoms\r\n");
+  _test_big();
   fprintf(stderr, "noun: deep\r\n");
   _test_deep();
   fprintf(stderr, "noun: garbage\r\n");

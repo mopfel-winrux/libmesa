@@ -722,6 +722,27 @@ _bits_put_atom(_bits_w* wri_u, c3_d bit_d, mesa_noun som)
 
   _bits_grow(wri_u, bit_d);
 
+  //  whole bytes: shifted into place (the buffer is zeroed)
+  //
+  {
+    c3_y  off_y = wri_u->pos_d & 7;
+    c3_y* out_y = wri_u->buf_y + (wri_u->pos_d >> 3);
+    c3_z  ful_z = c3_min(bit_d >> 3, len_z);
+
+    if ( !off_y ) {
+      memcpy(out_y, buf_y, ful_z);
+    }
+    else {
+      for ( c3_z j_z = 0; j_z < ful_z; j_z++ ) {
+        out_y[j_z]     |= (c3_y)(buf_y[j_z] << off_y);
+        out_y[j_z + 1] |= (c3_y)(buf_y[j_z] >> (8 - off_y));
+      }
+    }
+    i_z = ful_z;
+    wri_u->pos_d += (c3_d)ful_z << 3;
+    bit_d -= (c3_d)ful_z << 3;
+  }
+
   while ( bit_d ) {
     c3_y can_y = (c3_y)c3_min(8, bit_d);
     c3_y byt_y = ( i_z < len_z ) ? buf_y[i_z] : 0;
@@ -882,7 +903,23 @@ _bits_get_atom(_bits_r* red_u, c3_d pos_d, c3_d bit_d)
   c3_y*     buf_y = c3_malloc(c3_max(len_z, 1));
   mesa_noun pro;
 
-  for ( c3_z i_z = 0; i_z < len_z; i_z++ ) {
+  c3_z ful_z = bit_d >> 3;
+  c3_y off_y = pos_d & 7;
+  const c3_y* src_y = red_u->buf_y + (pos_d >> 3);
+
+  //  whole bytes, then the rest; a whole byte's high part, when
+  //  unaligned, is in the next byte, which is in bounds since all
+  //  [bit_d] bits are
+  //
+  if ( !off_y ) {
+    memcpy(buf_y, src_y, ful_z);
+  }
+  else {
+    for ( c3_z i_z = 0; i_z < ful_z; i_z++ ) {
+      buf_y[i_z] = (c3_y)((src_y[i_z] >> off_y) | (src_y[i_z + 1] << (8 - off_y)));
+    }
+  }
+  for ( c3_z i_z = ful_z; i_z < len_z; i_z++ ) {
     c3_y can_y = (c3_y)c3_min(8, bit_d - (i_z << 3));
     buf_y[i_z] = (c3_y)_bits_get(red_u, pos_d + (i_z << 3), can_y);
   }

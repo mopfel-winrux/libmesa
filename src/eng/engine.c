@@ -160,7 +160,6 @@ _load_row(void* arg, const uint8_t* key_y, size_t key_z,
     case KEY_LOAD: {
       eng_flow* flo_u;
       eng_msg*  msg_u;
-      eng_msg** end_u;
 
       if ( 34 != key_z ) break;
       _key_ship(key_y, who_u);
@@ -171,9 +170,7 @@ _load_row(void* arg, const uint8_t* key_y, size_t key_z,
       msg_u = c3_calloc(sizeof(*msg_u));
       msg_u->seq_d = _get_be(key_y + 26);
       msg_u->msg   = mesa_ref(val);
-      end_u = &flo_u->lod_u;
-      while ( *end_u ) end_u = &(*end_u)->nex_u;
-      *end_u = msg_u;
+      eng_flow_append(flo_u, msg_u);   //  rows come in seq order
     } break;
 
     case KEY_SHUT: {
@@ -581,6 +578,7 @@ mesa_engine_open(const mesa_config* cfg, mesa_engine** out)
   eng->lod_o = c3n;
   eng->gcd_d = cfg->now + ENG_GC_MS;
   eng_peer_map_init(&eng->per_u);
+  eng_line_map_init(&eng->lim_u);
 
   mesa_keys_from_ring(&eng->key_u, 65, cfg->ident.ring);
   mesa_keys_pass(&eng->key_u, eng->pas_y);
@@ -605,6 +603,7 @@ mesa_engine_open(const mesa_config* cfg, mesa_engine** out)
   if ( MESA_OK != (err_e = _boot(eng, cfg)) ) {
     _free_state(eng);
     eng_peer_map_cleanup(&eng->per_u);
+    eng_line_map_cleanup(&eng->lim_u);
     c3_free(eng);
     return err_e;
   }
@@ -616,6 +615,7 @@ mesa_engine_open(const mesa_config* cfg, mesa_engine** out)
   if ( c3n == _load_state(eng) ) {
     _free_state(eng);
     eng_peer_map_cleanup(&eng->per_u);
+    eng_line_map_cleanup(&eng->lim_u);
     c3_free(eng);
     return MESA_E_STORE;
   }
@@ -657,6 +657,7 @@ mesa_engine_close(mesa_engine* eng)
   eng_out_cut(eng, &eng->out_u);
   _free_state(eng);
   eng_peer_map_cleanup(&eng->per_u);
+  eng_line_map_cleanup(&eng->lim_u);
   c3_free(eng);
 }
 
@@ -697,28 +698,13 @@ _tick(mesa_engine* eng, c3_d now_d)
   }
 }
 
+/* eng_hear_pact(): one mesa datagram, inside a transaction
+*/
 void
-mesa_engine_hear(mesa_engine* eng, mesa_lane from,
-                 const uint8_t* buf, size_t len, uint64_t now)
+eng_hear_pact(mesa_engine* eng, mesa_lane from, const c3_y* buf, c3_z len)
 {
   u3_mesa_pact pac_u;
   c3_y         buf_y[PACT_SIZE];
-
-  _tick(eng, now);
-
-  if ( (c3y == eng->bad_o) || (len > PACT_SIZE) ) {
-    return;
-  }
-
-  //  classic ames: we only ever ask its sender to move to mesa
-  //
-  if ( c3n == mesa_is_new_pact((c3_y*)buf, (c3_h)len) ) {
-    if ( c3y == eng_txn_open(eng) ) {
-      eng_ames_hear(eng, from, buf, len);
-      eng_txn_close(eng);
-    }
-    return;
-  }
 
   memcpy(buf_y, buf, len);
   memset(&pac_u, 0, sizeof(pac_u));
@@ -727,10 +713,8 @@ mesa_engine_hear(mesa_engine* eng, mesa_lane from,
   }
   eng_trace("hear", &pac_u);
 
-  if ( c3n == eng_txn_open(eng) ) {
-    return;
-  }
-
+  eng->hea_y = buf;
+  eng->hea_z = len;
   switch ( pac_u.hed_u.typ_y ) {
     case PACT_PEEK: {
       if ( c3y == u3_ships_equal(pac_u.pek_u.nam_u.her_u, eng->our_u) ) {
@@ -748,7 +732,34 @@ mesa_engine_hear(mesa_engine* eng, mesa_lane from,
 
     default: break;
   }
+  eng->hea_y = 0;
+  eng->hea_z = 0;
+}
 
+void
+mesa_engine_hear(mesa_engine* eng, mesa_lane from,
+                 const uint8_t* buf, size_t len, uint64_t now)
+{
+  _tick(eng, now);
+
+  if ( (c3y == eng->bad_o) || (len > PACT_SIZE) ) {
+    return;
+  }
+
+  //  classic ames: we only ever ask its sender to move to mesa
+  //
+  if ( c3n == mesa_is_new_pact((c3_y*)buf, (c3_h)len) ) {
+    if ( c3y == eng_txn_open(eng) ) {
+      eng_ames_hear(eng, from, buf, len);
+      eng_txn_close(eng);
+    }
+    return;
+  }
+
+  if ( c3n == eng_txn_open(eng) ) {
+    return;
+  }
+  eng_hear_pact(eng, from, buf, len);
   eng_txn_close(eng);
 }
 
@@ -1101,8 +1112,7 @@ _keen(mesa_engine* eng, mesa_ship her, const char* path,
     req_u->kid_d = kid_d;
     memcpy(req_u->shk_y, key_y, 32);
   }
-  c3_free(req_u->pat_c);
-  req_u->pat_c = eng_keen_path(per_u, req_u);
+  eng_req_rename(per_u, req_u, eng_keen_path(per_u, req_u));
 
   _contact(eng, per_u);
   eng_req_send(eng, per_u, req_u);
